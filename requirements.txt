@@ -2,4 +2,6 @@ streamlit
 pandas
 numpy
 lightgbm
-plotly
+
+plotly　　　
+scikit-learn

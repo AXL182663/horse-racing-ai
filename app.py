@@ -26,7 +26,7 @@ def get_banner():
         <div style="background-color: {BANNER_YELLOW}; border-radius: 10px; padding: 20px 30px; display: flex; align-items: center;">
             <div style="flex: 1; text-align: center;">{img_html}</div>
             <div style="flex: 2; padding-left: 30px;">
-                <h1 style='color: {TEXT_COLOR}; font-family: Arial; font-size: 3.2rem; font-weight: 900; margin: 0;'>AI HORSE RACING SYSTEM</h1>
+                <h1 translate='no' class='notranslate' style='color: {TEXT_COLOR}; font-family: Arial; font-size: 3.2rem; font-weight: 900; margin: 0;'>AI HORSE RACING SYSTEM</h1>
                 <p style='color: {TEXT_COLOR}; font-size: 1.1rem; font-weight: bold;'>PREDICTION & REAL-TIME EDIT</p>
             </div>
         </div>
@@ -129,7 +129,7 @@ def clean_zougen_str(x):
 
 model, j_stats, s_stats, g_stats, t_stats, horse_agg, place_map, weather_map, track_map, surface_map, train_features, style_map = load_and_train_ai()
 
-# --- サイドバー (絶対に消えないようにタブの外へ移動) ---
+# --- サイドバー (元の英語表記に完全復元！) ---
 with st.sidebar:
     st.header("⚙️ SETTINGS")
     weather_setting = st.selectbox("WEATHER", ["指定なし", "晴", "曇", "小雨", "雨", "小雪", "雪"])
@@ -137,14 +137,12 @@ with st.sidebar:
     syutuba_file = st.file_uploader("📂 RACE CARD (CSV)", type=["csv"])
     training_files = st.file_uploader("📂 TRAINING DATA", type=["csv"], accept_multiple_files=True)
     
-    # 新規ファイルの検知
     is_new_file = False
     if syutuba_file:
         if 'last_filename' in st.session_state and st.session_state.last_filename != syutuba_file.name:
             is_new_file = True
             st.warning(f"⚠️ 新しいファイル「{syutuba_file.name}」がセットされました。下の「♻️ RESET DATA」を押して読み込んでください。")
 
-    # ボタンを変数に入れて確実に表示させる
     reset_clicked = st.button("♻️ RESET DATA", type="primary" if is_new_file else "secondary")
     run_button = st.button("⚡ GENERATE PREDICTION", use_container_width=True)
 
@@ -200,9 +198,26 @@ def run_analysis(input_df):
             df_training['Lap1'] = pd.to_numeric(df_training['Lap1'], errors='coerce')
             df_training['Lap2'] = pd.to_numeric(df_training['Lap2'], errors='coerce')
             df_training['加速'] = df_training['Lap1'] - df_training['Lap2']
-            train_agg = df_training.groupby('馬名').agg(L1=('Lap1','mean'), K=('加速','mean')).reset_index()
-            df_work = pd.merge(df_work, train_agg, on='馬名', how='left')
-            df_work['調教スコア'] = (calc_dev(df_work['L1']) + calc_dev(df_work['K'])) / 2
+            
+            if '調教種別' in df_training.columns:
+                t_agg = df_training.groupby(['調教種別', '馬名']).agg(L1=('Lap1','mean'), K=('加速','mean')).reset_index()
+                score_list = []
+                for course, group in t_agg.groupby('調教種別'):
+                    g = group.copy()
+                    g['L1_dev'] = calc_dev(g['L1'])
+                    g['K_dev'] = calc_dev(g['K'])
+                    g['コース別スコア'] = (g['L1_dev'] + g['K_dev']) / 2
+                    score_list.append(g)
+                if score_list:
+                    t_scored = pd.concat(score_list)
+                    final_t = t_scored.groupby('馬名')['コース別スコア'].max().reset_index().rename(columns={'コース別スコア': 'temp_score'})
+                    df_work = pd.merge(df_work, final_t, on='馬名', how='left')
+                    df_work['調教スコア'] = df_work['temp_score'].fillna(50.0)
+                    df_work = df_work.drop(columns=['temp_score'])
+            else:
+                train_agg = df_training.groupby('馬名').agg(L1=('Lap1','mean'), K=('加速','mean')).reset_index()
+                df_work = pd.merge(df_work, train_agg, on='馬名', how='left')
+                df_work['調教スコア'] = (calc_dev(df_work['L1']) + calc_dev(df_work['K'])) / 2
 
     df_work['調教スコア'] = df_work['調教スコア'].fillna(50.0).round(1)
     df_work['総合AIスコア'] = ((df_work['AI予測_複勝確率'] * 0.75) + (df_work['調教スコア'] * 0.25)).round(1)
@@ -216,7 +231,7 @@ def run_analysis(input_df):
         final.append(g)
     return pd.concat(final)
 
-# --- メイン画面 (タブ) ---
+# --- メイン画面 (タブも元の英語表記に復元！) ---
 tab1, tab2 = st.tabs(["🔮 AI PREDICTION (予想)", "📊 PERFORMANCE (成績分析)"])
 
 with tab1:
@@ -225,7 +240,8 @@ with tab1:
             st.session_state.current_result = run_analysis(st.session_state.master_data)
 
         if 'current_result' in st.session_state:
-            st.markdown("### 🏁 予想結果 (馬体重・増減を入力して右のボタンを押してください)")
+            st.markdown("### 🏁 予想結果")
+            st.info("💡 表の中で馬体重を入力し、各レースの右にある「🔄 再計算」ボタンを押すと即座に反映されます。")
             
             edited_dfs = {}
             recalc_triggered = False
@@ -308,10 +324,8 @@ with tab2:
             df_res['馬名'] = df_res['馬名'].astype(str).str.strip().apply(lambda x: unicodedata.normalize('NFKC', x))
             df_res = df_res.drop_duplicates(subset=['馬名'], keep='first')
             
-            # ▼ 最強セキュリティ：予想した馬の「半分以上」が結果CSVに存在しないと計算をブロック ▼
             df_merge = pd.merge(df_pred, df_res[['馬名', '確定着順', '単勝配当', '複勝配当']], on='馬名', how='inner')
             
-            # 一致した馬が、予想した全頭数の50%未満なら弾く
             match_ratio = len(df_merge) / len(df_pred) if len(df_pred) > 0 else 0
             
             if match_ratio < 0.5:

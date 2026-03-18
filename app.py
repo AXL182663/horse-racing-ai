@@ -6,6 +6,7 @@ import unicodedata
 import warnings
 import os
 import base64
+import plotly.express as px
 
 warnings.filterwarnings('ignore')
 st.set_page_config(page_title="AI HORSE RACING SYSTEM", layout="wide")
@@ -128,107 +129,115 @@ def clean_zougen_str(x):
 
 model, j_stats, s_stats, g_stats, t_stats, horse_agg, place_map, weather_map, track_map, surface_map, train_features, style_map = load_and_train_ai()
 
-# --- メイン処理 ---
-tab1, tab2 = st.tabs(["🔮 AI PREDICTION", "📊 PERFORMANCE"])
-
-with tab1:
-    with st.sidebar:
-        st.header("⚙️ SETTINGS")
-        weather_setting = st.selectbox("WEATHER", ["指定なし", "晴", "曇", "小雨", "雨", "小雪", "雪"])
-        track_setting = st.selectbox("TRACK", ["指定なし", "良", "稍重", "重", "不良"])
-        syutuba_file = st.file_uploader("📂 RACE CARD (CSV)", type=["csv"])
-        training_files = st.file_uploader("📂 TRAINING DATA", type=["csv"], accept_multiple_files=True)
-        run_button = st.button("⚡ GENERATE PREDICTION", use_container_width=True)
-
+# --- サイドバー (絶対に消えないようにタブの外へ移動) ---
+with st.sidebar:
+    st.header("⚙️ SETTINGS")
+    weather_setting = st.selectbox("WEATHER", ["指定なし", "晴", "曇", "小雨", "雨", "小雪", "雪"])
+    track_setting = st.selectbox("TRACK", ["指定なし", "良", "稍重", "重", "不良"])
+    syutuba_file = st.file_uploader("📂 RACE CARD (CSV)", type=["csv"])
+    training_files = st.file_uploader("📂 TRAINING DATA", type=["csv"], accept_multiple_files=True)
+    
+    # 新規ファイルの検知
+    is_new_file = False
     if syutuba_file:
-        # ▼ ユーザーへの警告システム（ファイル変更検知） ▼
-        is_new_file = False
         if 'last_filename' in st.session_state and st.session_state.last_filename != syutuba_file.name:
             is_new_file = True
-            st.sidebar.warning(f"⚠️ 新しいファイル「{syutuba_file.name}」がセットされました。下の「♻️ RESET DATA」を押して読み込んでください。")
+            st.warning(f"⚠️ 新しいファイル「{syutuba_file.name}」がセットされました。下の「♻️ RESET DATA」を押して読み込んでください。")
 
-        # ファイルが新しい場合はボタンを青色(primary)にして目立たせる
-        if 'master_data' not in st.session_state or st.sidebar.button("♻️ RESET DATA", type="primary" if is_new_file else "secondary"):
-            df_raw = read_uploaded_file(syutuba_file, is_syutuba=True)
-            df_all = df_raw.iloc[:, :24].copy()
-            df_all.columns = ['枠番', '馬番', '場所', 'R', 'レース名', '芝ダ', '距離', '頭数', '馬名', '時刻', '条件', 'B', '性別', '年齢', '騎手', '斤量', '馬体重', '増減', '所属', '調教師', '父', '母父', '前走着順', '脚質']
-            
-            df_all['レース名'] = df_all['レース名'].astype(str).str.replace('クラッス', 'クラス').str.replace('クラックス', 'クラス').str.replace('ｸﾗｽ', 'クラス')
-            df_all['レース名'] = df_all['レース名'].apply(lambda x: unicodedata.normalize('NFKC', x))
-            df_all['芝ダ'] = df_all['芝ダ'].astype(str).str.strip().str.replace('田', 'ダ')
-            df_all['馬番'] = pd.to_numeric(df_all['馬番'].astype(str).str.replace(r'\D', '', regex=True), errors='coerce')
-            df_all['枠番'] = pd.to_numeric(df_all['枠番'], errors='coerce')
-            df_all['馬名'] = df_all['馬名'].astype(str).str.strip()
-            
-            df_all['馬体重'] = pd.to_numeric(df_all['馬体重'], errors='coerce')
-            df_all['増減'] = df_all['増減'].apply(clean_zougen_str)
-            
-            st.session_state.master_data = df_all
-            st.session_state.last_filename = syutuba_file.name  # ファイル名を記憶
-            st.sidebar.success("✅ データを読み込みました！")
+    # ボタンを変数に入れて確実に表示させる
+    reset_clicked = st.button("♻️ RESET DATA", type="primary" if is_new_file else "secondary")
+    run_button = st.button("⚡ GENERATE PREDICTION", use_container_width=True)
 
-        def run_analysis(input_df):
-            df_work = input_df.copy()
-            df_work['脚質_num'] = df_work['脚質'].astype(str).str.strip().map(style_map).fillna(3)
-            df_work['前走確定着順'] = pd.to_numeric(df_work['前走着順'], errors='coerce').fillna(10)
-            df_work['斤量'] = pd.to_numeric(df_work['斤量'].astype(str).str.extract(r'(\d+\.?\d*)')[0], errors='coerce')
+# --- 出馬表データの読み込み ---
+if syutuba_file:
+    if 'master_data' not in st.session_state or reset_clicked:
+        df_raw = read_uploaded_file(syutuba_file, is_syutuba=True)
+        df_all = df_raw.iloc[:, :24].copy()
+        df_all.columns = ['枠番', '馬番', '場所', 'R', 'レース名', '芝ダ', '距離', '頭数', '馬名', '時刻', '条件', 'B', '性別', '年齢', '騎手', '斤量', '馬体重', '増減', '所属', '調教師', '父', '母父', '前走着順', '脚質']
+        
+        df_all['レース名'] = df_all['レース名'].astype(str).str.replace('クラッス', 'クラス').str.replace('クラックス', 'クラス').str.replace('ｸﾗｽ', 'クラス')
+        df_all['レース名'] = df_all['レース名'].apply(lambda x: unicodedata.normalize('NFKC', x))
+        df_all['芝ダ'] = df_all['芝ダ'].astype(str).str.strip().str.replace('田', 'ダ')
+        df_all['馬番'] = pd.to_numeric(df_all['馬番'].astype(str).str.replace(r'\D', '', regex=True), errors='coerce')
+        df_all['枠番'] = pd.to_numeric(df_all['枠番'], errors='coerce')
+        df_all['馬名'] = df_all['馬名'].astype(str).str.strip()
+        
+        df_all['馬体重'] = pd.to_numeric(df_all['馬体重'], errors='coerce')
+        df_all['増減'] = df_all['増減'].apply(clean_zougen_str)
+        
+        st.session_state.master_data = df_all
+        st.session_state.last_filename = syutuba_file.name 
+        st.sidebar.success("✅ データを読み込みました！")
+
+def run_analysis(input_df):
+    df_work = input_df.copy()
+    df_work['脚質_num'] = df_work['脚質'].astype(str).str.strip().map(style_map).fillna(3)
+    df_work['前走確定着順'] = pd.to_numeric(df_work['前走着順'], errors='coerce').fillna(10)
+    df_work['斤量'] = pd.to_numeric(df_work['斤量'].astype(str).str.extract(r'(\d+\.?\d*)')[0], errors='coerce')
+    
+    df_work = pd.merge(df_work, j_stats, on=['場所', '騎手'], how='left')
+    df_work = pd.merge(df_work, s_stats, left_on=['場所', '父'], right_on=['場所', '種牡馬'], how='left')
+    df_work = pd.merge(df_work, g_stats, left_on=['場所', '芝ダ', '馬番'], right_on=['場所', '芝ダ_str', '馬番'], how='left')
+    if not t_stats.empty: df_work = pd.merge(df_work, t_stats, on=['場所', '調教師'], how='left')
+    df_work = pd.merge(df_work, horse_agg, on='馬名', how='left')
+
+    df_work['天候_num'] = weather_map.get(weather_setting, np.nan)
+    df_work['馬場状態_num'] = track_map.get(track_setting, np.nan)
+    df_work['芝ダ_num'] = df_work['芝ダ'].map(surface_map)
+    df_work['場所_num'] = df_work['場所'].map(place_map)
+    df_work['距離'] = pd.to_numeric(df_work['距離'], errors='coerce')
+    df_work['年齢'] = pd.to_numeric(df_work['年齢'], errors='coerce')
+
+    X = df_work[train_features].fillna(0)
+    df_work['AI予測_複勝確率'] = (model.predict_proba(X)[:, 1] * 100).round(1)
+
+    df_work['調教スコア'] = 50.0
+    if training_files:
+        dfs_t = [read_uploaded_file(f) for f in training_files]
+        df_training = pd.concat(dfs_t, ignore_index=True)
+        if '馬名' in df_training.columns and 'Lap1' in df_training.columns:
+            df_training['馬名'] = df_training['馬名'].astype(str).str.strip()
+            df_training['Lap1'] = pd.to_numeric(df_training['Lap1'], errors='coerce')
+            df_training['Lap2'] = pd.to_numeric(df_training['Lap2'], errors='coerce')
+            df_training['加速'] = df_training['Lap1'] - df_training['Lap2']
+            train_agg = df_training.groupby('馬名').agg(L1=('Lap1','mean'), K=('加速','mean')).reset_index()
+            df_work = pd.merge(df_work, train_agg, on='馬名', how='left')
+            df_work['調教スコア'] = (calc_dev(df_work['L1']) + calc_dev(df_work['K'])) / 2
+
+    df_work['調教スコア'] = df_work['調教スコア'].fillna(50.0).round(1)
+    df_work['総合AIスコア'] = ((df_work['AI予測_複勝確率'] * 0.75) + (df_work['調教スコア'] * 0.25)).round(1)
+    
+    df_work['コース別馬番複勝率_disp'] = (df_work['コース別馬番複勝率'] * 100).round(1)
+    
+    final = []
+    for _, g in df_work.groupby(['場所', 'R', 'レース名']):
+        g = g.sort_values('総合AIスコア', ascending=False).reset_index(drop=True)
+        g['予想印'] = [('◎' if i==0 else '〇' if i==1 else '▲' if i==2 else '△' if i<=5 else '') for i in range(len(g))]
+        final.append(g)
+    return pd.concat(final)
+
+# --- メイン画面 (タブ) ---
+tab1, tab2 = st.tabs(["🔮 AI PREDICTION (予想)", "📊 PERFORMANCE (成績分析)"])
+
+with tab1:
+    if run_button or 'current_result' in st.session_state:
+        if run_button and 'master_data' in st.session_state:
+            st.session_state.current_result = run_analysis(st.session_state.master_data)
+
+        if 'current_result' in st.session_state:
+            st.markdown("### 🏁 予想結果 (馬体重・増減を入力して右のボタンを押してください)")
             
-            df_work = pd.merge(df_work, j_stats, on=['場所', '騎手'], how='left')
-            df_work = pd.merge(df_work, s_stats, left_on=['場所', '父'], right_on=['場所', '種牡馬'], how='left')
-            df_work = pd.merge(df_work, g_stats, left_on=['場所', '芝ダ', '馬番'], right_on=['場所', '芝ダ_str', '馬番'], how='left')
-            if not t_stats.empty: df_work = pd.merge(df_work, t_stats, on=['場所', '調教師'], how='left')
-            df_work = pd.merge(df_work, horse_agg, on='馬名', how='left')
-
-            df_work['天候_num'] = weather_map.get(weather_setting, np.nan)
-            df_work['馬場状態_num'] = track_map.get(track_setting, np.nan)
-            df_work['芝ダ_num'] = df_work['芝ダ'].map(surface_map)
-            df_work['場所_num'] = df_work['場所'].map(place_map)
-            df_work['距離'] = pd.to_numeric(df_work['距離'], errors='coerce')
-            df_work['年齢'] = pd.to_numeric(df_work['年齢'], errors='coerce')
-
-            X = df_work[train_features].fillna(0)
-            df_work['AI予測_複勝確率'] = (model.predict_proba(X)[:, 1] * 100).round(1)
-
-            df_work['調教スコア'] = 50.0
-            if training_files:
-                dfs_t = [read_uploaded_file(f) for f in training_files]
-                df_training = pd.concat(dfs_t, ignore_index=True)
-                if '馬名' in df_training.columns and 'Lap1' in df_training.columns:
-                    df_training['馬名'] = df_training['馬名'].astype(str).str.strip()
-                    df_training['Lap1'] = pd.to_numeric(df_training['Lap1'], errors='coerce')
-                    df_training['Lap2'] = pd.to_numeric(df_training['Lap2'], errors='coerce')
-                    df_training['加速'] = df_training['Lap1'] - df_training['Lap2']
-                    train_agg = df_training.groupby('馬名').agg(L1=('Lap1','mean'), K=('加速','mean')).reset_index()
-                    df_work = pd.merge(df_work, train_agg, on='馬名', how='left')
-                    df_work['調教スコア'] = (calc_dev(df_work['L1']) + calc_dev(df_work['K'])) / 2
-
-            df_work['調教スコア'] = df_work['調教スコア'].fillna(50.0).round(1)
-            df_work['総合AIスコア'] = ((df_work['AI予測_複勝確率'] * 0.75) + (df_work['調教スコア'] * 0.25)).round(1)
-            
-            df_work['コース別馬番複勝率_disp'] = (df_work['コース別馬番複勝率'] * 100).round(1)
-            
-            final = []
-            for _, g in df_work.groupby(['場所', 'R', 'レース名']):
-                g = g.sort_values('総合AIスコア', ascending=False).reset_index(drop=True)
-                g['予想印'] = [('◎' if i==0 else '〇' if i==1 else '▲' if i==2 else '△' if i<=5 else '') for i in range(len(g))]
-                final.append(g)
-            return pd.concat(final)
-
-        if run_button or 'current_result' in st.session_state:
-            if run_button:
-                st.session_state.current_result = run_analysis(st.session_state.master_data)
-
-            st.markdown("### 🏁 予想結果 (この表で直接「馬体重・増減」を入力できます)")
-            st.info("💡 下の表で馬体重を入力後、このボタンを押すことで即座にAIスコアが再計算されます。")
-            
-            # ▼ 使い勝手向上のため、再計算ボタンを「一番上」に配置 ▼
-            recalc_clicked = st.button("🔄 入力した馬体重で予想を再計算", type="primary")
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            edited_dfs = []
+            edited_dfs = {}
+            recalc_triggered = False
             
             for r_id, group in st.session_state.current_result.groupby(['場所', 'R', 'レース名']):
-                st.subheader(f"🏆 {r_id[0]} {r_id[1]}R - {r_id[2]}")
+                c1, c2 = st.columns([8, 2])
+                with c1:
+                    st.subheader(f"🏆 {r_id[0]} {r_id[1]}R - {r_id[2]}")
+                with c2:
+                    st.write("") 
+                    if st.button("🔄 再計算", key=f"btn_{r_id[0]}_{r_id[1]}", use_container_width=True):
+                        recalc_triggered = True
                 
                 disp_cols = ['予想印', '枠番', '馬番', '馬名', '斤量', '騎手', 'コース別馬番複勝率_disp', '馬体重', '増減', 'AI予測_複勝確率', '調教スコア', '総合AIスコア', '脚質']
                 disp = group[disp_cols].copy()
@@ -263,11 +272,11 @@ with tab1:
                     use_container_width=True,
                     key=f"editor_{r_id[0]}_{r_id[1]}"
                 )
-                edited_dfs.append(edited)
+                edited_dfs[r_id] = edited
+                st.markdown("---")
             
-            # ▼ 上部のボタンが押された時の処理をループ後に実行 ▼
-            if recalc_clicked:
-                combined_edited = pd.concat(edited_dfs)
+            if recalc_triggered:
+                combined_edited = pd.concat(list(edited_dfs.values()))
                 for i, row in combined_edited.iterrows():
                     m_idx = st.session_state.master_data[st.session_state.master_data['馬名'] == row['馬名']].index
                     st.session_state.master_data.loc[m_idx, '馬体重'] = row['馬体重']
@@ -275,4 +284,65 @@ with tab1:
                 st.session_state.current_result = run_analysis(st.session_state.master_data)
                 st.rerun()
 
-            st.divider()
+# --- 超・厳密マッチング機能付き：成績分析タブ ---
+with tab2:
+    st.header("📊 PERFORMANCE (成績分析)")
+    st.info("💡 予想を実行した後に、その日の結果CSVをアップロードすると回収率や勝率が表示されます。")
+    res_file = st.file_uploader("📂 UPLOAD RESULTS (結果CSV)", type=["csv"])
+    
+    if res_file and st.session_state.get('current_result') is not None:
+        try:
+            df_res = read_uploaded_file(res_file)
+            df_pred = st.session_state['current_result'].copy()
+            
+            def clean_pay(val):
+                if pd.isna(val) or val == "": return 0
+                s = str(val).replace(',', '').replace('(', '').replace(')', '').strip()
+                try: return int(float(s))
+                except: return 0
+                
+            df_res['単勝配当'] = df_res['単勝配当'].apply(clean_pay)
+            df_res['複勝配当'] = df_res['複勝配導'].apply(clean_pay) if '複勝配導' in df_res.columns else df_res['複勝配当'].apply(clean_pay)
+            df_res['確定着順'] = pd.to_numeric(df_res['確定着順'], errors='coerce')
+            
+            df_res['馬名'] = df_res['馬名'].astype(str).str.strip().apply(lambda x: unicodedata.normalize('NFKC', x))
+            df_res = df_res.drop_duplicates(subset=['馬名'], keep='first')
+            
+            # ▼ 最強セキュリティ：予想した馬の「半分以上」が結果CSVに存在しないと計算をブロック ▼
+            df_merge = pd.merge(df_pred, df_res[['馬名', '確定着順', '単勝配当', '複勝配当']], on='馬名', how='inner')
+            
+            # 一致した馬が、予想した全頭数の50%未満なら弾く
+            match_ratio = len(df_merge) / len(df_pred) if len(df_pred) > 0 else 0
+            
+            if match_ratio < 0.5:
+                st.error(f"⚠️ エラー：別の日のデータです。（予想した馬 {len(df_pred)} 頭のうち、結果データと一致したのは {len(df_merge)} 頭だけでした）")
+            elif df_merge.empty:
+                st.warning("⚠️ 結果データに一致する馬が見つかりませんでした。")
+            else:
+                marks = ['◎', '〇', '▲', '△']
+                analysis = []
+                for m in marks:
+                    m_df = df_merge[df_merge['予想印'] == m]
+                    if len(m_df) > 0:
+                        win_r = (m_df['確定着順'] == 1).mean() * 100
+                        pla_r = (m_df['確定着順'] <= 3).mean() * 100
+                        win_roi = (m_df['単勝配当'].sum() / (len(m_df) * 100)) * 100
+                        pla_roi = (m_df['複勝配当'].sum() / (len(m_df) * 100)) * 100
+                        analysis.append({'印': m, '勝率': win_r, '複勝率': pla_r, '単勝回収': win_roi, '複勝回収': pla_roi, '対象頭数': len(m_df)})
+                        
+                df_ana = pd.DataFrame(analysis)
+                
+                cols = st.columns(len(analysis))
+                for i, row in df_ana.iterrows():
+                    cols[i].metric(f"印 {row['印']}", f"回収 {row['単勝回収']:.0f}%", f"勝率 {row['勝率']:.1f}%")
+                    
+                st.table(df_ana.style.format({'勝率': '{:.1f}%', '複勝率': '{:.1f}%', '単勝回収': '{:.1f}%', '複勝回収': '{:.1f}%', '対象頭数': '{:d}頭'}))
+                
+                c1, c2 = st.columns(2)
+                with c1: 
+                    st.plotly_chart(px.bar(df_ana, x='印', y='単勝回収', title="単勝回収率 (%)", color='印', color_discrete_sequence=['#ff2800','#ffca28','#343a40','#0077b6']), use_container_width=True)
+                with c2: 
+                    st.plotly_chart(px.bar(df_ana, x='印', y='複勝率', title="複勝的中率 (%)", color='印', color_discrete_sequence=['#ff2800','#ffca28','#343a40','#0077b6']), use_container_width=True)
+                
+        except Exception as e: 
+            st.error(f"分析エラー: {e}")

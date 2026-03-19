@@ -159,21 +159,17 @@ model, j_stats, s_stats, g_stats, t_stats, horse_agg, place_map, weather_map, tr
 with st.sidebar:
     st.header("⚙️ データ読み込み")
     
-    # 進行状況の判定
     is_master_ready = 'master_data' in st.session_state
     is_result_ready = 'current_result' in st.session_state
     
-    # セッションからアップロード状態を取得（ファイルが1つでも入っていればTrue）
     syutuba_file_raw = st.session_state.get("syutuba_uploader_key")
     syutuba_uploaded = bool(syutuba_file_raw)
 
-    # 【STEP 1: 出馬表】
     if not is_master_ready and not syutuba_uploaded:
         st.markdown('<div class="glow-guide">👇【STEP 1】まずは「出馬表」をココに！</div>', unsafe_allow_html=True)
     
     syutuba_file = st.file_uploader("📂 出馬表 (CSV)", type=["csv"], key="syutuba_uploader_key")
 
-    # 【STEP 2: 調教データ ＆ 記憶ボタン】
     if not is_master_ready and syutuba_uploaded:
         st.markdown('<div class="glow-guide">👇【STEP 2】調教データがあればココに！（無い場合は下へ）</div>', unsafe_allow_html=True)
         
@@ -182,11 +178,9 @@ with st.sidebar:
     if not is_master_ready and syutuba_uploaded:
         st.markdown('<div class="glow-guide">👇【STEP 3】ココをタップして記憶させる！</div>', unsafe_allow_html=True)
 
-    # セーブボタン（STEP 3の時だけPrimary色）
     save_btn_type = "primary" if (not is_master_ready and syutuba_uploaded) else "secondary"
     save_clicked = st.button("💾 ファイルをシステムに記憶させる", type=save_btn_type, use_container_width=True)
     
-    # セーブ処理
     if save_clicked:
         if syutuba_file:
             df_raw = read_uploaded_file(syutuba_file, is_syutuba=True)
@@ -216,7 +210,6 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # 【STEP 4: 予想実行ボタン】
     if is_master_ready and not is_result_ready:
         st.markdown('<div class="glow-guide">👇【STEP 4】最後に「予想を実行」をタップ！</div>', unsafe_allow_html=True)
         
@@ -227,6 +220,10 @@ with st.sidebar:
     if st.button("🗑️ オールクリア (全データ初期化)", type="secondary", use_container_width=True):
         st.session_state.clear()
         st.rerun()
+
+def on_condition_change():
+    if 'master_data' in st.session_state:
+        st.session_state.current_result = run_analysis(st.session_state.master_data)
 
 # --- AI予測ロジック ---
 def run_analysis(input_df):
@@ -241,17 +238,24 @@ def run_analysis(input_df):
     if not t_stats.empty: df_work = pd.merge(df_work, t_stats, on=['場所', '調教師'], how='left')
     df_work = pd.merge(df_work, horse_agg, on='馬名', how='left')
 
+    # ▼ ここが進化！芝ダの識別を先に行って馬場状態を別々に適用する ▼
+    df_work['芝ダ_num'] = df_work['芝ダ'].map(surface_map)
+    
     df_work['天候_num'] = np.nan
     df_work['馬場状態_num'] = np.nan
     for venue in df_work['場所'].unique():
         w_val = st.session_state.get(f"weather_{venue}", "指定なし")
-        t_val = st.session_state.get(f"track_{venue}", "指定なし")
+        t_shiba_val = st.session_state.get(f"track_shiba_{venue}", "指定なし")
+        t_dirt_val = st.session_state.get(f"track_dirt_{venue}", "指定なし")
         
-        idx = df_work['場所'] == venue
-        df_work.loc[idx, '天候_num'] = weather_map.get(w_val, np.nan)
-        df_work.loc[idx, '馬場状態_num'] = track_map.get(t_val, np.nan)
+        idx_venue = df_work['場所'] == venue
+        idx_shiba = idx_venue & (df_work['芝ダ_num'] == 1)
+        idx_dirt = idx_venue & (df_work['芝ダ_num'] != 1) # ダートと障害
+        
+        df_work.loc[idx_venue, '天候_num'] = weather_map.get(w_val, np.nan)
+        df_work.loc[idx_shiba, '馬場状態_num'] = track_map.get(t_shiba_val, np.nan)
+        df_work.loc[idx_dirt, '馬場状態_num'] = track_map.get(t_dirt_val, np.nan)
 
-    df_work['芝ダ_num'] = df_work['芝ダ'].map(surface_map)
     df_work['場所_num'] = df_work['場所'].map(place_map)
     df_work['距離'] = pd.to_numeric(df_work['距離'], errors='coerce')
     df_work['年齢'] = pd.to_numeric(df_work['年齢'], errors='coerce')
@@ -306,10 +310,6 @@ def run_analysis(input_df):
         final.append(g)
     return pd.concat(final)
 
-def on_condition_change():
-    if 'master_data' in st.session_state:
-        st.session_state.current_result = run_analysis(st.session_state.master_data)
-
 # --- メイン画面 (タブ) ---
 tab1, tab2 = st.tabs(["🔮 AI PREDICTION (予想)", "📊 PERFORMANCE (成績分析)"])
 
@@ -320,7 +320,7 @@ with tab1:
 
     if 'current_result' in st.session_state:
         st.markdown("### 🏁 予想結果")
-        st.info("💡 入力した馬体重は自動で記憶されます（オールクリアを押すまで消えません）。手動セーブや再計算も各レースのボタンから行えます。")
+        st.info("💡 天候・馬場状態を変更すると即座に計算されます。入力した馬体重は自動記憶されます（手動セーブも可能）。")
         
         need_recalc = False
         save_triggered = False
@@ -329,16 +329,22 @@ with tab1:
         for venue in venues:
             st.markdown(f"<h2 style='color: {BANNER_RED}; border-bottom: 2px solid {BANNER_RED}; padding-bottom: 5px; margin-top: 30px;'>📍 {venue}競馬場</h2>", unsafe_allow_html=True)
             
-            c1, c2, c3 = st.columns([2, 2, 6])
+            # ▼ ここが芝とダートの別設定 UI ▼
+            c1, c2, c3, c4 = st.columns([2, 2.5, 2.5, 3])
             with c1:
-                w_val = st.selectbox(f"天候 ({venue})", ["指定なし", "晴", "曇", "小雨", "雨", "小雪", "雪"], key=f"weather_box_{venue}")
+                w_val = st.selectbox(f"天候", ["指定なし", "晴", "曇", "小雨", "雨", "小雪", "雪"], key=f"weather_box_{venue}")
                 if st.session_state.get(f"weather_{venue}") != w_val:
                     st.session_state[f"weather_{venue}"] = w_val
                     need_recalc = True
             with c2:
-                t_val = st.selectbox(f"馬場状態 ({venue})", ["指定なし", "良", "稍重", "重", "不良"], key=f"track_box_{venue}")
-                if st.session_state.get(f"track_{venue}") != t_val:
-                    st.session_state[f"track_{venue}"] = t_val
+                t_shiba_val = st.selectbox(f"芝 馬場", ["指定なし", "良", "稍重", "重", "不良"], key=f"track_shiba_box_{venue}")
+                if st.session_state.get(f"track_shiba_{venue}") != t_shiba_val:
+                    st.session_state[f"track_shiba_{venue}"] = t_shiba_val
+                    need_recalc = True
+            with c3:
+                t_dirt_val = st.selectbox(f"ダート 馬場", ["指定なし", "良", "稍重", "重", "不良"], key=f"track_dirt_box_{venue}")
+                if st.session_state.get(f"track_dirt_{venue}") != t_dirt_val:
+                    st.session_state[f"track_dirt_{venue}"] = t_dirt_val
                     need_recalc = True
             
             venue_df = st.session_state.current_result[st.session_state.current_result['場所'] == venue]

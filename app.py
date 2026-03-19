@@ -129,7 +129,7 @@ def clean_zougen_str(x):
 
 model, j_stats, s_stats, g_stats, t_stats, horse_agg, place_map, weather_map, track_map, surface_map, train_features, style_map = load_and_train_ai()
 
-# --- サイドバー (元の英語表記に完全復元！) ---
+# --- サイドバー ---
 with st.sidebar:
     st.header("⚙️ SETTINGS")
     weather_setting = st.selectbox("WEATHER", ["指定なし", "晴", "曇", "小雨", "雨", "小雪", "雪"])
@@ -199,10 +199,17 @@ def run_analysis(input_df):
             df_training['Lap2'] = pd.to_numeric(df_training['Lap2'], errors='coerce')
             df_training['加速'] = df_training['Lap1'] - df_training['Lap2']
             
+            # ▼ ここが進化！列名が「調教種別」でも「コース」でも自動対応 ▼
+            course_col = None
             if '調教種別' in df_training.columns:
-                t_agg = df_training.groupby(['調教種別', '馬名']).agg(L1=('Lap1','mean'), K=('加速','mean')).reset_index()
+                course_col = '調教種別'
+            elif 'コース' in df_training.columns:
+                course_col = 'コース'
+
+            if course_col:
+                t_agg = df_training.groupby([course_col, '馬名']).agg(L1=('Lap1','mean'), K=('加速','mean')).reset_index()
                 score_list = []
-                for course, group in t_agg.groupby('調教種別'):
+                for course, group in t_agg.groupby(course_col):
                     g = group.copy()
                     g['L1_dev'] = calc_dev(g['L1'])
                     g['K_dev'] = calc_dev(g['K'])
@@ -231,7 +238,7 @@ def run_analysis(input_df):
         final.append(g)
     return pd.concat(final)
 
-# --- メイン画面 (タブも元の英語表記に復元！) ---
+# --- メイン画面 (タブ) ---
 tab1, tab2 = st.tabs(["🔮 AI PREDICTION (予想)", "📊 PERFORMANCE (成績分析)"])
 
 with tab1:

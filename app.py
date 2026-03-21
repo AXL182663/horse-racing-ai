@@ -42,6 +42,10 @@ def save_backup():
 # アプリ起動時にバックアップがあれば自動で読み込む
 load_backup()
 
+# UIリセット用のキー初期化
+if 'file_key' not in st.session_state:
+    st.session_state.file_key = 0
+
 # --- 🎨 デザインCSS & ヘッダー ---
 img_name = "ferrari.png" 
 BANNER_RED, BANNER_YELLOW, TEXT_COLOR = "#ff2800", "#ffca28", "#000000"
@@ -198,18 +202,19 @@ with st.sidebar:
     is_master_ready = 'master_data' in st.session_state
     is_result_ready = 'current_result' in st.session_state
     
-    syutuba_file_raw = st.session_state.get("syutuba_uploader_key")
+    # ファイルキーを使ってアップローダーの状態を管理
+    syutuba_file_raw = st.session_state.get(f"syutuba_{st.session_state.file_key}")
     syutuba_uploaded = bool(syutuba_file_raw)
 
     if not is_master_ready and not syutuba_uploaded:
         st.markdown('<div class="glow-guide">👇【STEP 1】まずは「出馬表」をココに！</div>', unsafe_allow_html=True)
     
-    syutuba_file = st.file_uploader("📂 出馬表 (CSV)", type=["csv"], key="syutuba_uploader_key")
+    syutuba_file = st.file_uploader("📂 出馬表 (CSV)", type=["csv"], key=f"syutuba_{st.session_state.file_key}")
 
     if not is_master_ready and syutuba_uploaded:
         st.markdown('<div class="glow-guide">👇【STEP 2】調教データがあればココに！</div>', unsafe_allow_html=True)
         
-    training_files = st.file_uploader("📂 調教データ (CSV)", type=["csv"], accept_multiple_files=True, key="training_uploader_key")
+    training_files = st.file_uploader("📂 調教データ (CSV)", type=["csv"], accept_multiple_files=True, key=f"training_{st.session_state.file_key}")
     
     if not is_master_ready and syutuba_uploaded:
         st.markdown('<div class="glow-guide">👇【STEP 3】ココをタップして記憶させる！</div>', unsafe_allow_html=True)
@@ -249,8 +254,14 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("<br><br><br>", unsafe_allow_html=True)
+    
+    # 🧹 オールクリアでUIも完全に消去する！
     if st.button("🗑️ オールクリア (全データ初期化)", type="secondary", use_container_width=True):
+        # 現在のキーを保存して＋1する（これでファイルアップローダーが初期化される）
+        new_key = st.session_state.file_key + 1
         st.session_state.clear()
+        st.session_state.file_key = new_key
+        
         for f in ['backup_master.pkl', 'backup_training.pkl', 'backup_result.pkl']:
             if os.path.exists(f): 
                 try: os.remove(f)
@@ -481,7 +492,6 @@ with tab1:
 
         st.markdown("---")
 
-        # ⚖️ 馬体重入力（シンプル化！）
         st.markdown("#### ⚖️ 馬体重入力")
         
         mc1, mc2, mc3, mc4 = st.columns([3, 2, 2, 2])
@@ -504,25 +514,21 @@ with tab1:
             with mc4:
                 st.write("") 
                 st.write("")
-                # 「反映」を「馬体重反映」に変更
                 if st.button("💾 馬体重反映", type="secondary", use_container_width=True, key="m_btn"):
                     m_idx = st.session_state.master_data[st.session_state.master_data['馬名'] == target_horse].index
                     st.session_state.master_data.loc[m_idx, '馬体重'] = new_w
                     st.session_state.master_data.loc[m_idx, '増減'] = new_z
                     save_backup()
-                    # 更新された馬の名前を保存して、リロード後にトースト通知を出す
                     st.session_state.weight_updated_just_now = target_horse
                     st.rerun()
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # アニメーション演出（タメ）付きの予想ボタン
         if st.button("⚡ 予想を実行 / 更新する", type="primary", use_container_width=True):
             with st.spinner('🧠 AIが最新データで計算中...'):
-                time.sleep(0.6) # 👈 わざと0.6秒待つことでアニメーションを見せる「演出のタメ」
+                time.sleep(0.6) 
                 st.session_state.current_result = run_analysis(st.session_state.master_data)
                 save_backup()
-                # リロード後にトースト通知を出すフラグ
                 st.session_state.predicted_just_now = True
             st.rerun()
 
@@ -531,7 +537,8 @@ with tab1:
 with tab2:
     st.header("📊 PERFORMANCE (成績分析)")
     st.info("💡 予想を実行した後に、その日の結果CSVをアップロードすると回収率や勝率が表示されます。")
-    res_file = st.file_uploader("📂 UPLOAD RESULTS (結果CSV)", type=["csv"])
+    # アップローダーのUIリセット対応
+    res_file = st.file_uploader("📂 UPLOAD RESULTS (結果CSV)", type=["csv"], key=f"res_{st.session_state.file_key}")
     
     if res_file and st.session_state.get('current_result') is not None:
         try:

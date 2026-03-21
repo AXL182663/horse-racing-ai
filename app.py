@@ -57,6 +57,13 @@ st.markdown("""
     margin-bottom: 5px;
     text-shadow: 1px 1px 3px rgba(0,0,0,0.6);
 }
+/* アコーディオンのUI調整 */
+.streamlit-expanderHeader {
+    font-weight: bold;
+    color: #333 !important;
+    background-color: #f8f9fa;
+    border-radius: 5px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -333,8 +340,8 @@ with tab1:
     if 'master_data' in st.session_state:
         st.markdown("### 🏁 レース選択 & 条件設定")
         
-        # 1. 競馬場・レース・天候・馬場を上部にすべて集約
-        c1, c2, c3, c4, c5 = st.columns([1.5, 1.2, 1.5, 1.5, 1.5])
+        # 1. 競馬場・レースの選択（上部にスッキリ配置）
+        c1, c2 = st.columns([1.5, 1.5])
         
         st.session_state.master_data['R'] = pd.to_numeric(st.session_state.master_data['R'], errors='coerce').fillna(0).astype(int)
         venues = st.session_state.master_data['場所'].unique()
@@ -346,19 +353,22 @@ with tab1:
         with c2:
             selected_race = st.selectbox("🏁 R", sorted(races), key="sel_race")
 
-        with c3:
-            w_val = st.selectbox("⛅ 天候", ["指定なし", "晴", "曇", "小雨", "雨", "小雪", "雪"], key=f"w_{selected_venue}")
-            st.session_state[f"weather_{selected_venue}"] = w_val
-        with c4:
-            t_shiba_val = st.selectbox("🌱 芝", ["指定なし", "良", "稍重", "重", "不良"], key=f"ts_{selected_venue}")
-            st.session_state[f"track_shiba_{selected_venue}"] = t_shiba_val
-        with c5:
-            t_dirt_val = st.selectbox("🟫 ダート", ["指定なし", "良", "稍重", "重", "不良"], key=f"td_{selected_venue}")
-            st.session_state[f"track_dirt_{selected_venue}"] = t_dirt_val
+        # 2. 天候・馬場は「アコーディオン（Expander）」に格納して隠す！
+        with st.expander("⛅ 天候・馬場状態の設定 (タップで開閉)", expanded=False):
+            wc1, wc2, wc3 = st.columns(3)
+            with wc1:
+                w_val = st.selectbox("天候", ["指定なし", "晴", "曇", "小雨", "雨", "小雪", "雪"], key=f"w_{selected_venue}")
+                st.session_state[f"weather_{selected_venue}"] = w_val
+            with wc2:
+                t_shiba_val = st.selectbox("芝", ["指定なし", "良", "稍重", "重", "不良"], key=f"ts_{selected_venue}")
+                st.session_state[f"track_shiba_{selected_venue}"] = t_shiba_val
+            with wc3:
+                t_dirt_val = st.selectbox("ダート", ["指定なし", "良", "稍重", "重", "不良"], key=f"td_{selected_venue}")
+                st.session_state[f"track_dirt_{selected_venue}"] = t_dirt_val
 
         st.markdown("---")
 
-        # 2. レース名の取得とヘッダー表示
+        # 3. レース名の取得とヘッダー表示
         race_df = st.session_state.master_data[
             (st.session_state.master_data['場所'] == selected_venue) & 
             (st.session_state.master_data['R'] == selected_race)
@@ -367,25 +377,22 @@ with tab1:
         race_df['馬番'] = pd.to_numeric(race_df['馬番'], errors='coerce')
         race_df = race_df.sort_values('馬番').reset_index(drop=True)
         
-        # ▼▼▼ 最強のレース名クリーニング機能 ▼▼▼
+        # レース名クリーニング
         raw_race_name = str(race_df['レース名'].iloc[0]) if not race_df.empty else ""
-        
-        # あらゆる「1R」「中山」「第1回」などの文字を強制的に消し去る
         clean_name = re.sub(r'第?\d+回', '', raw_race_name)
         clean_name = re.sub(r'\d+日目?', '', clean_name)
         clean_name = re.sub(r'[^\s]*競馬場', '', clean_name)
         clean_name = re.sub(r'\d+[RＲrｒ]', '', clean_name)
         clean_name = clean_name.replace(selected_venue, '')
-        clean_name = re.sub(r'^[\s\-ー_]+', '', clean_name) # 先頭のゴミを削除
+        clean_name = re.sub(r'^[\s\-ー_]+', '', clean_name) 
         clean_name = clean_name.strip()
 
         if clean_name == "" or clean_name.lower() == "nan":
             st.subheader(f"🏆 {selected_venue} {int(selected_race)}R")
         else:
             st.subheader(f"🏆 {selected_venue} {int(selected_race)}R - {clean_name}")
-        # ▲▲▲ ここまで ▲▲▲
 
-        # 3. 予想データがあればマージしてスコア類を復活
+        # 4. 予想データがあればマージしてスコア類を復活
         if 'current_result' in st.session_state:
             pred_df = st.session_state.current_result[
                 (st.session_state.current_result['場所'] == selected_venue) & 
@@ -398,7 +405,7 @@ with tab1:
                     
                 race_df = pd.merge(race_df, pred_df[merge_cols], on='馬名', how='left')
                 if 'コース別馬番複勝率_disp' in race_df.columns:
-                    race_df = race_df.rename(columns={'コース別馬番複勝率_disp': 'コース別馬番複勝率'})
+                    race_df = race_df.rename(columns={'コース別馬番複勝率_disp': '馬番複勝率'})
             else:
                 race_df['予想印'] = ""
         else:
@@ -409,8 +416,8 @@ with tab1:
         
         if 'AI予測_複勝確率' in race_df.columns:
             disp_cols.extend(['AI予測_複勝確率', '調教スコア', '総合AIスコア'])
-        if 'コース別馬番複勝率' in race_df.columns:
-            disp_cols.append('コース別馬番複勝率')
+        if '馬番複勝率' in race_df.columns:
+            disp_cols.append('馬番複勝率')
 
         disp = race_df[disp_cols].copy()
 
@@ -422,7 +429,7 @@ with tab1:
 
         styled_disp = disp.style.apply(apply_waku, axis=1)
 
-        # 4. データエディター
+        # 5. データエディター（スマホ向けにstep=2で最適化！）
         edited = st.data_editor(
             styled_disp,
             column_config={
@@ -432,12 +439,15 @@ with tab1:
                 "馬名": st.column_config.Column("馬名", disabled=True),
                 "斤量": st.column_config.NumberColumn("斤量", disabled=True),
                 "騎手": st.column_config.Column("騎手", disabled=True),
-                "馬体重": st.column_config.NumberColumn("馬体重", step=1),
-                "増減": st.column_config.NumberColumn("増減", step=1, format="%+d"),
+                
+                # ▼ 馬体重と増減を「2kg刻み(step=2)」に設定し、スマホのテンキー・増減ボタンを最適化 ▼
+                "馬体重": st.column_config.NumberColumn("馬体重", min_value=300, max_value=700, step=2),
+                "増減": st.column_config.NumberColumn("増減", step=2, format="%+d"),
+                
                 "AI予測_複勝確率": st.column_config.NumberColumn("AI複勝率", format="%.1f%%", disabled=True),
                 "調教スコア": st.column_config.NumberColumn("調教", format="%.1f", disabled=True),
                 "総合AIスコア": st.column_config.NumberColumn("総合AI", format="%.1f", disabled=True),
-                "コース別馬番複勝率": st.column_config.NumberColumn("馬番複勝率", format="%.1f%%", disabled=True), # ← ここを「馬番複勝率」に変更！
+                "馬番複勝率": st.column_config.NumberColumn("馬番複勝率", format="%.1f%%", disabled=True),
             },
             hide_index=True,
             use_container_width=True,
@@ -460,7 +470,7 @@ with tab1:
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # 5. 予想実行ボタン
+        # 6. 予想実行ボタン
         if st.button("⚡ 予想を実行 / 更新する", type="primary", use_container_width=True):
             with st.spinner('AIが計算中...'):
                 st.session_state.current_result = run_analysis(st.session_state.master_data)

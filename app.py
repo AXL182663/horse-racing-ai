@@ -9,6 +9,7 @@ import base64
 import plotly.express as px
 import pickle
 import re
+import time
 
 warnings.filterwarnings('ignore')
 st.set_page_config(page_title="AI HORSE RACING SYSTEM", layout="wide")
@@ -341,6 +342,15 @@ def run_analysis(input_df):
 tab1, tab2 = st.tabs(["🔮 AI PREDICTION (予想)", "📊 PERFORMANCE (成績分析)"])
 
 with tab1:
+    # --- 通知（トースト）の表示処理 ---
+    if st.session_state.get('predicted_just_now'):
+        st.toast("✨ 予想を最新データで更新しました！", icon="✅")
+        st.session_state.predicted_just_now = False
+
+    if st.session_state.get('weight_updated_just_now'):
+        st.toast(f"⚖️ {st.session_state.weight_updated_just_now} の馬体重を反映しました！", icon="✅")
+        st.session_state.weight_updated_just_now = False
+
     if 'master_data' in st.session_state:
         st.markdown("### 🏁 レース選択 & 条件設定")
         
@@ -447,7 +457,6 @@ with tab1:
             key=f"editor_{selected_venue}_{int(selected_race)}"
         )
 
-        # 🚀【魔法の修正】NaN同士の比較による無限ループバグを完全に阻止！
         data_changed = False
         for i, row in edited.iterrows():
             m_idx = st.session_state.master_data[st.session_state.master_data['馬名'] == row['馬名']].index
@@ -458,7 +467,6 @@ with tab1:
                 z_master = st.session_state.master_data.loc[m_idx[0], '増減']
                 z_edited = row['増減']
                 
-                # 「空っぽ(NaN)」と「空っぽ(NaN)」を比較してTrueにならないようにガード
                 changed_w = (w_master != w_edited) and not (pd.isna(w_master) and pd.isna(w_edited))
                 changed_z = (z_master != z_edited) and not (pd.isna(z_master) and pd.isna(z_edited))
                 
@@ -469,13 +477,12 @@ with tab1:
                 
         if data_changed:
             save_backup()
-            st.rerun()  # 変更があった時のみ確実に1発リロード！
+            st.rerun()  
 
         st.markdown("---")
 
-        # 📱 スマホ専用：馬体重サクサク入力ツール
-        st.markdown("#### 📱 スマホ専用：馬体重サクサク入力ツール")
-        st.info("💡 表のタップがやりにくい場合は、こちらを使うと「＋ / －」ボタンでサクサク入力できます！")
+        # ⚖️ 馬体重入力（シンプル化！）
+        st.markdown("#### ⚖️ 馬体重入力")
         
         mc1, mc2, mc3, mc4 = st.columns([3, 2, 2, 2])
         with mc1:
@@ -497,20 +504,26 @@ with tab1:
             with mc4:
                 st.write("") 
                 st.write("")
-                if st.button("💾 反映", type="secondary", use_container_width=True, key="m_btn"):
+                # 「反映」を「馬体重反映」に変更
+                if st.button("💾 馬体重反映", type="secondary", use_container_width=True, key="m_btn"):
                     m_idx = st.session_state.master_data[st.session_state.master_data['馬名'] == target_horse].index
                     st.session_state.master_data.loc[m_idx, '馬体重'] = new_w
                     st.session_state.master_data.loc[m_idx, '増減'] = new_z
                     save_backup()
+                    # 更新された馬の名前を保存して、リロード後にトースト通知を出す
+                    st.session_state.weight_updated_just_now = target_horse
                     st.rerun()
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # 無事復活した予想ボタン！
+        # アニメーション演出（タメ）付きの予想ボタン
         if st.button("⚡ 予想を実行 / 更新する", type="primary", use_container_width=True):
-            with st.spinner('AIが計算中...'):
+            with st.spinner('🧠 AIが最新データで計算中...'):
+                time.sleep(0.6) # 👈 わざと0.6秒待つことでアニメーションを見せる「演出のタメ」
                 st.session_state.current_result = run_analysis(st.session_state.master_data)
                 save_backup()
+                # リロード後にトースト通知を出すフラグ
+                st.session_state.predicted_just_now = True
             st.rerun()
 
 

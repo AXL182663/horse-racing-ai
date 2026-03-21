@@ -7,15 +7,36 @@ import warnings
 import os
 import base64
 import plotly.express as px
+import pickle
+import re
 
 warnings.filterwarnings('ignore')
 st.set_page_config(page_title="AI HORSE RACING SYSTEM", layout="wide")
+
+# --- 💾 超強力：自動バックアップ＆復元機能 ---
+def load_backup():
+    if 'master_data' not in st.session_state and os.path.exists('backup_master.pkl'):
+        st.session_state.master_data = pd.read_pickle('backup_master.pkl')
+    if 'training_df' not in st.session_state and os.path.exists('backup_training.pkl'):
+        st.session_state.training_df = pd.read_pickle('backup_training.pkl')
+    if 'current_result' not in st.session_state and os.path.exists('backup_result.pkl'):
+        st.session_state.current_result = pd.read_pickle('backup_result.pkl')
+
+def save_backup():
+    if 'master_data' in st.session_state:
+        st.session_state.master_data.to_pickle('backup_master.pkl')
+    if 'training_df' in st.session_state:
+        st.session_state.training_df.to_pickle('backup_training.pkl')
+    if 'current_result' in st.session_state:
+        st.session_state.current_result.to_pickle('backup_result.pkl')
+
+# アプリ起動時にバックアップがあれば自動で読み込む
+load_backup()
 
 # --- 🎨 デザインCSS & ヘッダー ---
 img_name = "ferrari.png" 
 BANNER_RED, BANNER_YELLOW, TEXT_COLOR = "#ff2800", "#ffca28", "#000000"
 
-# ▼ 100%確実に表示される！鼓動する光るナビゲーションCSS ▼
 st.markdown("""
 <style>
 @keyframes pulse-box {
@@ -155,7 +176,7 @@ def clean_zougen_str(x):
 
 model, j_stats, s_stats, g_stats, t_stats, horse_agg, place_map, weather_map, track_map, surface_map, train_features, style_map = load_and_train_ai()
 
-# --- サイドバー（絶対光るナビゲーション） ---
+# --- サイドバー ---
 with st.sidebar:
     st.header("⚙️ データ読み込み")
     
@@ -171,7 +192,7 @@ with st.sidebar:
     syutuba_file = st.file_uploader("📂 出馬表 (CSV)", type=["csv"], key="syutuba_uploader_key")
 
     if not is_master_ready and syutuba_uploaded:
-        st.markdown('<div class="glow-guide">👇【STEP 2】調教データがあればココに！（無い場合は下へ）</div>', unsafe_allow_html=True)
+        st.markdown('<div class="glow-guide">👇【STEP 2】調教データがあればココに！</div>', unsafe_allow_html=True)
         
     training_files = st.file_uploader("📂 調教データ (CSV)", type=["csv"], accept_multiple_files=True, key="training_uploader_key")
     
@@ -196,34 +217,32 @@ with st.sidebar:
             df_all['馬体重'] = pd.to_numeric(df_all['馬体重'], errors='coerce')
             df_all['増減'] = df_all['増減'].apply(clean_zougen_str)
             
+            # レース番号を確実に整数化
+            df_all['R'] = pd.to_numeric(df_all['R'], errors='coerce').fillna(0).astype(int)
+            
             st.session_state.master_data = df_all
             st.session_state.last_filename = syutuba_file.name
+            save_backup() # 保存したらバックアップ
             st.success("✅ 出馬表を記憶しました！")
             
         if training_files:
             dfs_t = [read_uploaded_file(f) for f in training_files]
             df_training = pd.concat(dfs_t, ignore_index=True)
             st.session_state.training_df = df_training
+            save_backup() # 保存したらバックアップ
             st.success("✅ 調教データを記憶しました！")
             
         st.rerun()
 
     st.markdown("---")
     
-    if is_master_ready and not is_result_ready:
-        st.markdown('<div class="glow-guide">👇【STEP 4】最後に「予想を実行」をタップ！</div>', unsafe_allow_html=True)
-        
-    run_btn_type = "primary" if (is_master_ready and not is_result_ready) else "secondary"
-    run_button = st.button("⚡ 予想を実行する", type=run_btn_type, use_container_width=True)
-    
     st.markdown("<br><br><br>", unsafe_allow_html=True)
     if st.button("🗑️ オールクリア (全データ初期化)", type="secondary", use_container_width=True):
         st.session_state.clear()
+        # バックアップファイルも削除
+        for f in ['backup_master.pkl', 'backup_training.pkl', 'backup_result.pkl']:
+            if os.path.exists(f): os.remove(f)
         st.rerun()
-
-def on_condition_change():
-    if 'master_data' in st.session_state:
-        st.session_state.current_result = run_analysis(st.session_state.master_data)
 
 # --- AI予測ロジック ---
 def run_analysis(input_df):
@@ -238,7 +257,6 @@ def run_analysis(input_df):
     if not t_stats.empty: df_work = pd.merge(df_work, t_stats, on=['場所', '調教師'], how='left')
     df_work = pd.merge(df_work, horse_agg, on='馬名', how='left')
 
-    # ▼ ここが進化！芝ダの識別を先に行って馬場状態を別々に適用する ▼
     df_work['芝ダ_num'] = df_work['芝ダ'].map(surface_map)
     
     df_work['天候_num'] = np.nan
@@ -250,7 +268,7 @@ def run_analysis(input_df):
         
         idx_venue = df_work['場所'] == venue
         idx_shiba = idx_venue & (df_work['芝ダ_num'] == 1)
-        idx_dirt = idx_venue & (df_work['芝ダ_num'] != 1) # ダートと障害
+        idx_dirt = idx_venue & (df_work['芝ダ_num'] != 1) 
         
         df_work.loc[idx_venue, '天候_num'] = weather_map.get(w_val, np.nan)
         df_work.loc[idx_shiba, '馬場状態_num'] = track_map.get(t_shiba_val, np.nan)
@@ -273,10 +291,8 @@ def run_analysis(input_df):
             df_training['加速'] = df_training['Lap1'] - df_training['Lap2']
             
             course_col = None
-            if '調教種別' in df_training.columns:
-                course_col = '調教種別'
-            elif 'コース' in df_training.columns:
-                course_col = 'コース'
+            if '調教種別' in df_training.columns: course_col = '調教種別'
+            elif 'コース' in df_training.columns: course_col = 'コース'
 
             if course_col:
                 t_agg = df_training.groupby([course_col, '馬名']).agg(L1=('Lap1','mean'), K=('加速','mean')).reset_index()
@@ -300,7 +316,6 @@ def run_analysis(input_df):
 
     df_work['調教スコア'] = df_work['調教スコア'].fillna(50.0).round(1)
     df_work['総合AIスコア'] = ((df_work['AI予測_複勝確率'] * 0.75) + (df_work['調教スコア'] * 0.25)).round(1)
-    
     df_work['コース別馬番複勝率_disp'] = (df_work['コース別馬番複勝率'] * 100).round(1)
     
     final = []
@@ -309,40 +324,41 @@ def run_analysis(input_df):
         g['予想印'] = [('◎' if i==0 else '〇' if i==1 else '▲' if i==2 else '△' if i<=5 else '') for i in range(len(g))]
         final.append(g)
     return pd.concat(final)
+
+
 # --- メイン画面 (タブ) ---
 tab1, tab2 = st.tabs(["🔮 AI PREDICTION (予想)", "📊 PERFORMANCE (成績分析)"])
 
 with tab1:
     if 'master_data' in st.session_state:
-        st.markdown("### 🏁 レース選択 & データ入力")
-        st.info("💡 競馬場とレースを選ぶと、出馬表が【馬番順】で表示されます。馬体重を入力してから予想を実行してください。")
-
-        # 1. スマホでパッと見れるように「競馬場」と「レース」を選択式に変更
-        c1, c2 = st.columns(2)
+        st.markdown("### 🏁 レース選択 & 条件設定")
+        
+        # 1. 競馬場・レース・天候・馬場を上部にすべて集約
+        c1, c2, c3, c4, c5 = st.columns([1.5, 1.2, 1.5, 1.5, 1.5])
+        
+        st.session_state.master_data['R'] = pd.to_numeric(st.session_state.master_data['R'], errors='coerce').fillna(0).astype(int)
         venues = st.session_state.master_data['場所'].unique()
+        
         with c1:
-            selected_venue = st.selectbox("📍 競馬場", venues)
+            selected_venue = st.selectbox("📍 競馬場", venues, key="sel_venue")
         
         races = st.session_state.master_data[st.session_state.master_data['場所'] == selected_venue]['R'].unique()
         with c2:
-            selected_race = st.selectbox("🏁 レース番号", sorted(races))
+            selected_race = st.selectbox("🏁 R", sorted(races), key="sel_race")
 
-        st.markdown("---")
-        st.subheader(f"🏆 {selected_venue} {int(selected_race)}R")
-
-        # 天候・馬場の設定（選択した競馬場のみ表示）
-        wc1, wc2, wc3 = st.columns(3)
-        with wc1:
-            w_val = st.selectbox("天候", ["指定なし", "晴", "曇", "小雨", "雨", "小雪", "雪"], key=f"w_{selected_venue}")
+        with c3:
+            w_val = st.selectbox("⛅ 天候", ["指定なし", "晴", "曇", "小雨", "雨", "小雪", "雪"], key=f"w_{selected_venue}")
             st.session_state[f"weather_{selected_venue}"] = w_val
-        with wc2:
-            t_shiba_val = st.selectbox("芝 馬場", ["指定なし", "良", "稍重", "重", "不良"], key=f"ts_{selected_venue}")
+        with c4:
+            t_shiba_val = st.selectbox("🌱 芝", ["指定なし", "良", "稍重", "重", "不良"], key=f"ts_{selected_venue}")
             st.session_state[f"track_shiba_{selected_venue}"] = t_shiba_val
-        with wc3:
-            t_dirt_val = st.selectbox("ダート 馬場", ["指定なし", "良", "稍重", "重", "不良"], key=f"td_{selected_venue}")
+        with c5:
+            t_dirt_val = st.selectbox("🟫 ダート", ["指定なし", "良", "稍重", "重", "不良"], key=f"td_{selected_venue}")
             st.session_state[f"track_dirt_{selected_venue}"] = t_dirt_val
 
-        # 2. 対象レースのデータを取得し、【常に馬番順（1〜）にソート】
+        st.markdown("---")
+
+        # 2. レース名の取得とヘッダー表示
         race_df = st.session_state.master_data[
             (st.session_state.master_data['場所'] == selected_venue) & 
             (st.session_state.master_data['R'] == selected_race)
@@ -350,27 +366,51 @@ with tab1:
         
         race_df['馬番'] = pd.to_numeric(race_df['馬番'], errors='coerce')
         race_df = race_df.sort_values('馬番').reset_index(drop=True)
+        
+        # ▼▼▼ 最強のレース名クリーニング機能 ▼▼▼
+        raw_race_name = str(race_df['レース名'].iloc[0]) if not race_df.empty else ""
+        
+        # あらゆる「1R」「中山」「第1回」などの文字を強制的に消し去る
+        clean_name = re.sub(r'第?\d+回', '', raw_race_name)
+        clean_name = re.sub(r'\d+日目?', '', clean_name)
+        clean_name = re.sub(r'[^\s]*競馬場', '', clean_name)
+        clean_name = re.sub(r'\d+[RＲrｒ]', '', clean_name)
+        clean_name = clean_name.replace(selected_venue, '')
+        clean_name = re.sub(r'^[\s\-ー_]+', '', clean_name) # 先頭のゴミを削除
+        clean_name = clean_name.strip()
 
-        # もし予想結果があれば、印やスコアを結合する
+        if clean_name == "" or clean_name.lower() == "nan":
+            st.subheader(f"🏆 {selected_venue} {int(selected_race)}R")
+        else:
+            st.subheader(f"🏆 {selected_venue} {int(selected_race)}R - {clean_name}")
+        # ▲▲▲ ここまで ▲▲▲
+
+        # 3. 予想データがあればマージしてスコア類を復活
         if 'current_result' in st.session_state:
             pred_df = st.session_state.current_result[
                 (st.session_state.current_result['場所'] == selected_venue) & 
                 (st.session_state.current_result['R'] == selected_race)
             ]
             if not pred_df.empty:
-                # 馬名でマージして印やスコアを持ってくる
-                race_df = pd.merge(race_df, pred_df[['馬名', '予想印', '総合AIスコア', 'AI予測_複勝確率', '調教スコア', 'コース別馬番複勝率_disp']], on='馬名', how='left')
+                merge_cols = ['馬名', '予想印', '総合AIスコア', 'AI予測_複勝確率', '調教スコア']
+                if 'コース別馬番複勝率_disp' in pred_df.columns:
+                    merge_cols.append('コース別馬番複勝率_disp')
+                    
+                race_df = pd.merge(race_df, pred_df[merge_cols], on='馬名', how='left')
+                if 'コース別馬番複勝率_disp' in race_df.columns:
+                    race_df = race_df.rename(columns={'コース別馬番複勝率_disp': 'コース別馬番複勝率'})
             else:
                 race_df['予想印'] = ""
-                race_df['総合AIスコア'] = np.nan
         else:
             race_df['予想印'] = ""
-            race_df['総合AIスコア'] = np.nan
 
-        # 表示するカラムの整理
+        # 表示するカラムの設定
         disp_cols = ['予想印', '枠番', '馬番', '馬名', '斤量', '騎手', '馬体重', '増減']
-        if '総合AIスコア' in race_df.columns:
-            disp_cols.append('総合AIスコア')
+        
+        if 'AI予測_複勝確率' in race_df.columns:
+            disp_cols.extend(['AI予測_複勝確率', '調教スコア', '総合AIスコア'])
+        if 'コース別馬番複勝率' in race_df.columns:
+            disp_cols.append('コース別馬番複勝率')
 
         disp = race_df[disp_cols].copy()
 
@@ -382,7 +422,7 @@ with tab1:
 
         styled_disp = disp.style.apply(apply_waku, axis=1)
 
-        # 3. データエディター（馬番順で入力しやすい！）
+        # 4. データエディター
         edited = st.data_editor(
             styled_disp,
             column_config={
@@ -394,30 +434,38 @@ with tab1:
                 "騎手": st.column_config.Column("騎手", disabled=True),
                 "馬体重": st.column_config.NumberColumn("馬体重", step=1),
                 "増減": st.column_config.NumberColumn("増減", step=1, format="%+d"),
-                "総合AIスコア": st.column_config.NumberColumn("AIスコア", format="%.1f", disabled=True),
+                "AI予測_複勝確率": st.column_config.NumberColumn("AI複勝率", format="%.1f%%", disabled=True),
+                "調教スコア": st.column_config.NumberColumn("調教", format="%.1f", disabled=True),
+                "総合AIスコア": st.column_config.NumberColumn("総合AI", format="%.1f", disabled=True),
+                "コース別馬番複勝率": st.column_config.NumberColumn("馬番複勝率", format="%.1f%%", disabled=True), # ← ここを「馬番複勝率」に変更！
             },
             hide_index=True,
             use_container_width=True,
             key=f"editor_{selected_venue}_{int(selected_race)}"
         )
 
-        # エディターでの変更を【即座に】大元のマスターデータに保存（消えにくくする対策）
+        # 馬体重が変更されたらマスターデータに反映＆バックアップ保存
+        data_changed = False
         for i, row in edited.iterrows():
             m_idx = st.session_state.master_data[st.session_state.master_data['馬名'] == row['馬名']].index
-            st.session_state.master_data.loc[m_idx, '馬体重'] = row['馬体重']
-            st.session_state.master_data.loc[m_idx, '増減'] = row['増減']
+            
+            if not m_idx.empty:
+                if st.session_state.master_data.loc[m_idx[0], '馬体重'] != row['馬体重'] or st.session_state.master_data.loc[m_idx[0], '増減'] != row['増減']:
+                    st.session_state.master_data.loc[m_idx, '馬体重'] = row['馬体重']
+                    st.session_state.master_data.loc[m_idx, '増減'] = row['増減']
+                    data_changed = True
+                
+        if data_changed:
+            save_backup()
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # 4. 予想ボタン（入力が終わったらここを押す）
-        if st.button("⚡ このレースの予想を実行 / 更新", type="primary", use_container_width=True):
+        # 5. 予想実行ボタン
+        if st.button("⚡ 予想を実行 / 更新する", type="primary", use_container_width=True):
             with st.spinner('AIが計算中...'):
-                # マスターデータ全体を再計算
                 st.session_state.current_result = run_analysis(st.session_state.master_data)
+                save_backup()
             st.rerun()
-
-# --- 超・厳密マッチング機能付き：成績分析タブ ---
-# （ここから下の tab2 のコードはそのまま変更なしでOKです！）
 
 
 # --- 超・厳密マッチング機能付き：成績分析タブ ---

@@ -13,22 +13,30 @@ import re
 warnings.filterwarnings('ignore')
 st.set_page_config(page_title="AI HORSE RACING SYSTEM", layout="wide")
 
-# --- 💾 超強力：自動バックアップ＆復元機能 ---
+# --- 💾 超強力：自動バックアップ＆復元機能（エラー防止強化版） ---
 def load_backup():
-    if 'master_data' not in st.session_state and os.path.exists('backup_master.pkl'):
-        st.session_state.master_data = pd.read_pickle('backup_master.pkl')
-    if 'training_df' not in st.session_state and os.path.exists('backup_training.pkl'):
-        st.session_state.training_df = pd.read_pickle('backup_training.pkl')
-    if 'current_result' not in st.session_state and os.path.exists('backup_result.pkl'):
-        st.session_state.current_result = pd.read_pickle('backup_result.pkl')
+    try:
+        if 'master_data' not in st.session_state and os.path.exists('backup_master.pkl'):
+            st.session_state.master_data = pd.read_pickle('backup_master.pkl')
+        if 'training_df' not in st.session_state and os.path.exists('backup_training.pkl'):
+            st.session_state.training_df = pd.read_pickle('backup_training.pkl')
+        if 'current_result' not in st.session_state and os.path.exists('backup_result.pkl'):
+            st.session_state.current_result = pd.read_pickle('backup_result.pkl')
+    except Exception:
+        pass 
 
 def save_backup():
-    if 'master_data' in st.session_state:
-        st.session_state.master_data.to_pickle('backup_master.pkl')
-    if 'training_df' in st.session_state:
-        st.session_state.training_df.to_pickle('backup_training.pkl')
-    if 'current_result' in st.session_state:
-        st.session_state.current_result.to_pickle('backup_result.pkl')
+    try:
+        if 'master_data' in st.session_state:
+            st.session_state.master_data.to_pickle('backup_master.pkl')
+        if 'training_df' in st.session_state:
+            st.session_state.training_df.to_pickle('backup_training.pkl')
+        if 'current_result' in st.session_state:
+            st.session_state.current_result.to_pickle('backup_result.pkl')
+    except PermissionError:
+        pass 
+    except Exception:
+        pass
 
 # アプリ起動時にバックアップがあれば自動で読み込む
 load_backup()
@@ -57,7 +65,6 @@ st.markdown("""
     margin-bottom: 5px;
     text-shadow: 1px 1px 3px rgba(0,0,0,0.6);
 }
-/* アコーディオンのUI調整 */
 .streamlit-expanderHeader {
     font-weight: bold;
     color: #333 !important;
@@ -223,32 +230,30 @@ with st.sidebar:
             df_all['馬名'] = df_all['馬名'].astype(str).str.strip()
             df_all['馬体重'] = pd.to_numeric(df_all['馬体重'], errors='coerce')
             df_all['増減'] = df_all['増減'].apply(clean_zougen_str)
-            
-            # レース番号を確実に整数化
             df_all['R'] = pd.to_numeric(df_all['R'], errors='coerce').fillna(0).astype(int)
             
             st.session_state.master_data = df_all
             st.session_state.last_filename = syutuba_file.name
-            save_backup() # 保存したらバックアップ
+            save_backup()
             st.success("✅ 出馬表を記憶しました！")
             
         if training_files:
             dfs_t = [read_uploaded_file(f) for f in training_files]
             df_training = pd.concat(dfs_t, ignore_index=True)
             st.session_state.training_df = df_training
-            save_backup() # 保存したらバックアップ
+            save_backup()
             st.success("✅ 調教データを記憶しました！")
             
         st.rerun()
 
     st.markdown("---")
-    
     st.markdown("<br><br><br>", unsafe_allow_html=True)
     if st.button("🗑️ オールクリア (全データ初期化)", type="secondary", use_container_width=True):
         st.session_state.clear()
-        # バックアップファイルも削除
         for f in ['backup_master.pkl', 'backup_training.pkl', 'backup_result.pkl']:
-            if os.path.exists(f): os.remove(f)
+            if os.path.exists(f): 
+                try: os.remove(f)
+                except: pass
         st.rerun()
 
 # --- AI予測ロジック ---
@@ -265,7 +270,6 @@ def run_analysis(input_df):
     df_work = pd.merge(df_work, horse_agg, on='馬名', how='left')
 
     df_work['芝ダ_num'] = df_work['芝ダ'].map(surface_map)
-    
     df_work['天候_num'] = np.nan
     df_work['馬場状態_num'] = np.nan
     for venue in df_work['場所'].unique():
@@ -340,9 +344,7 @@ with tab1:
     if 'master_data' in st.session_state:
         st.markdown("### 🏁 レース選択 & 条件設定")
         
-        # 1. 競馬場・レースの選択（上部にスッキリ配置）
         c1, c2 = st.columns([1.5, 1.5])
-        
         st.session_state.master_data['R'] = pd.to_numeric(st.session_state.master_data['R'], errors='coerce').fillna(0).astype(int)
         venues = st.session_state.master_data['場所'].unique()
         
@@ -353,7 +355,6 @@ with tab1:
         with c2:
             selected_race = st.selectbox("🏁 R", sorted(races), key="sel_race")
 
-        # 2. 天候・馬場は「アコーディオン（Expander）」に格納して隠す！
         with st.expander("⛅ 天候・馬場状態の設定 (タップで開閉)", expanded=False):
             wc1, wc2, wc3 = st.columns(3)
             with wc1:
@@ -368,7 +369,6 @@ with tab1:
 
         st.markdown("---")
 
-        # 3. レース名の取得とヘッダー表示
         race_df = st.session_state.master_data[
             (st.session_state.master_data['場所'] == selected_venue) & 
             (st.session_state.master_data['R'] == selected_race)
@@ -377,7 +377,6 @@ with tab1:
         race_df['馬番'] = pd.to_numeric(race_df['馬番'], errors='coerce')
         race_df = race_df.sort_values('馬番').reset_index(drop=True)
         
-        # レース名クリーニング
         raw_race_name = str(race_df['レース名'].iloc[0]) if not race_df.empty else ""
         clean_name = re.sub(r'第?\d+回', '', raw_race_name)
         clean_name = re.sub(r'\d+日目?', '', clean_name)
@@ -392,7 +391,6 @@ with tab1:
         else:
             st.subheader(f"🏆 {selected_venue} {int(selected_race)}R - {clean_name}")
 
-        # 4. 予想データがあればマージしてスコア類を復活
         if 'current_result' in st.session_state:
             pred_df = st.session_state.current_result[
                 (st.session_state.current_result['場所'] == selected_venue) & 
@@ -411,7 +409,6 @@ with tab1:
         else:
             race_df['予想印'] = ""
 
-        # 表示するカラムの設定
         disp_cols = ['予想印', '枠番', '馬番', '馬名', '斤量', '騎手', '馬体重', '増減']
         
         if 'AI予測_複勝確率' in race_df.columns:
@@ -429,7 +426,6 @@ with tab1:
 
         styled_disp = disp.style.apply(apply_waku, axis=1)
 
-        # 5. データエディター（スマホ向けにstep=2で最適化！）
         edited = st.data_editor(
             styled_disp,
             column_config={
@@ -439,11 +435,8 @@ with tab1:
                 "馬名": st.column_config.Column("馬名", disabled=True),
                 "斤量": st.column_config.NumberColumn("斤量", disabled=True),
                 "騎手": st.column_config.Column("騎手", disabled=True),
-                
-                # ▼ 馬体重と増減を「2kg刻み(step=2)」に設定し、スマホのテンキー・増減ボタンを最適化 ▼
                 "馬体重": st.column_config.NumberColumn("馬体重", min_value=300, max_value=700, step=2),
                 "増減": st.column_config.NumberColumn("増減", step=2, format="%+d"),
-                
                 "AI予測_複勝確率": st.column_config.NumberColumn("AI複勝率", format="%.1f%%", disabled=True),
                 "調教スコア": st.column_config.NumberColumn("調教", format="%.1f", disabled=True),
                 "総合AIスコア": st.column_config.NumberColumn("総合AI", format="%.1f", disabled=True),
@@ -454,23 +447,66 @@ with tab1:
             key=f"editor_{selected_venue}_{int(selected_race)}"
         )
 
-        # 馬体重が変更されたらマスターデータに反映＆バックアップ保存
+        # 🚀【魔法の修正】NaN同士の比較による無限ループバグを完全に阻止！
         data_changed = False
         for i, row in edited.iterrows():
             m_idx = st.session_state.master_data[st.session_state.master_data['馬名'] == row['馬名']].index
             
             if not m_idx.empty:
-                if st.session_state.master_data.loc[m_idx[0], '馬体重'] != row['馬体重'] or st.session_state.master_data.loc[m_idx[0], '増減'] != row['増減']:
-                    st.session_state.master_data.loc[m_idx, '馬体重'] = row['馬体重']
-                    st.session_state.master_data.loc[m_idx, '増減'] = row['増減']
+                w_master = st.session_state.master_data.loc[m_idx[0], '馬体重']
+                w_edited = row['馬体重']
+                z_master = st.session_state.master_data.loc[m_idx[0], '増減']
+                z_edited = row['増減']
+                
+                # 「空っぽ(NaN)」と「空っぽ(NaN)」を比較してTrueにならないようにガード
+                changed_w = (w_master != w_edited) and not (pd.isna(w_master) and pd.isna(w_edited))
+                changed_z = (z_master != z_edited) and not (pd.isna(z_master) and pd.isna(z_edited))
+                
+                if changed_w or changed_z:
+                    st.session_state.master_data.loc[m_idx, '馬体重'] = w_edited
+                    st.session_state.master_data.loc[m_idx, '増減'] = z_edited
                     data_changed = True
                 
         if data_changed:
             save_backup()
+            st.rerun()  # 変更があった時のみ確実に1発リロード！
+
+        st.markdown("---")
+
+        # 📱 スマホ専用：馬体重サクサク入力ツール
+        st.markdown("#### 📱 スマホ専用：馬体重サクサク入力ツール")
+        st.info("💡 表のタップがやりにくい場合は、こちらを使うと「＋ / －」ボタンでサクサク入力できます！")
+        
+        mc1, mc2, mc3, mc4 = st.columns([3, 2, 2, 2])
+        with mc1:
+            horse_options = race_df['馬番'].astype(str) + "番: " + race_df['馬名']
+            selected_horse_str = st.selectbox("🐴 馬を選択", horse_options, key="m_horse")
+            target_horse = selected_horse_str.split(": ")[1] if selected_horse_str else ""
+
+        if target_horse:
+            curr_w = st.session_state.master_data.loc[st.session_state.master_data['馬名'] == target_horse, '馬体重'].values[0]
+            curr_z = st.session_state.master_data.loc[st.session_state.master_data['馬名'] == target_horse, '増減'].values[0]
+            
+            val_w = int(curr_w) if pd.notna(curr_w) and curr_w != 0 else 480
+            val_z = int(curr_z) if pd.notna(curr_z) else 0
+
+            with mc2:
+                new_w = st.number_input("⚖️ 馬体重", value=val_w, step=2, key="m_w")
+            with mc3:
+                new_z = st.number_input("📈 増減", value=val_z, step=2, key="m_z")
+            with mc4:
+                st.write("") 
+                st.write("")
+                if st.button("💾 反映", type="secondary", use_container_width=True, key="m_btn"):
+                    m_idx = st.session_state.master_data[st.session_state.master_data['馬名'] == target_horse].index
+                    st.session_state.master_data.loc[m_idx, '馬体重'] = new_w
+                    st.session_state.master_data.loc[m_idx, '増減'] = new_z
+                    save_backup()
+                    st.rerun()
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # 6. 予想実行ボタン
+        # 無事復活した予想ボタン！
         if st.button("⚡ 予想を実行 / 更新する", type="primary", use_container_width=True):
             with st.spinner('AIが計算中...'):
                 st.session_state.current_result = run_analysis(st.session_state.master_data)

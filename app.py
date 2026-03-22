@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import lightgbm as lgb
+import xgboost as xgb
+from catboost import CatBoostClassifier
 import unicodedata
 import warnings
 import os
@@ -12,9 +14,9 @@ import re
 import time
 
 warnings.filterwarnings('ignore')
-st.set_page_config(page_title="AI HORSE RACING SYSTEM", layout="wide")
+st.set_page_config(page_title="AI HORSE RACING SYSTEM v2.5", layout="wide")
 
-# --- 💾 超強力：自動バックアップ＆復元機能（エラー防止強化版） ---
+# --- 💾 超強力：自動バックアップ＆復元機能 ---
 def load_backup():
     try:
         if 'master_data' not in st.session_state and os.path.exists('backup_master.pkl'):
@@ -42,7 +44,6 @@ def save_backup():
 # アプリ起動時にバックアップがあれば自動で読み込む
 load_backup()
 
-# UIリセット用のキー初期化
 if 'file_key' not in st.session_state:
     st.session_state.file_key = 0
 
@@ -90,15 +91,15 @@ def get_banner():
         <div style="background-color: {BANNER_YELLOW}; border-radius: 10px; padding: 20px 30px; display: flex; align-items: center;">
             <div style="flex: 1; text-align: center;">{img_html}</div>
             <div style="flex: 2; padding-left: 30px;">
-                <h1 translate='no' class='notranslate' style='color: {TEXT_COLOR}; font-family: Arial; font-size: 3.2rem; font-weight: 900; margin: 0;'>AI HORSE RACING SYSTEM</h1>
-                <p style='color: {TEXT_COLOR}; font-size: 1.1rem; font-weight: bold;'>PREDICTION & REAL-TIME EDIT</p>
+                <h1 translate='no' class='notranslate' style='color: {TEXT_COLOR}; font-family: Arial; font-size: 3.2rem; font-weight: 900; margin: 0;'>AI HORSE RACING SYSTEM v2.5</h1>
+                <p style='color: {TEXT_COLOR}; font-size: 1.1rem; font-weight: bold;'>3-SAGES ENSEMBLE MODEL (FULL SPEC)</p>
             </div>
         </div>
     </div>"""
 
 st.markdown(get_banner(), unsafe_allow_html=True)
 
-# --- 🧠 AI学習エンジン ---
+# --- 🧠 AI学習エンジン (3賢者 & アイデアABCD全盛り) ---
 @st.cache_resource
 def load_and_train_ai():
     if os.path.exists('5yers_data.zip'):
@@ -121,24 +122,53 @@ def load_and_train_ai():
     df_past['確定着順_num'] = df_past['確定着順'].apply(clean_rank)
     df_past['is_top3'] = df_past['確定着順_num'].apply(lambda x: 1 if x <= 3 else 0)
 
+    # --- データ前処理 ---
+    df_past = df_past.sort_values(['馬名', '日付'] if '日付' in df_past.columns else ['馬名'])
+    df_past['前走距離'] = df_past.groupby('馬名')['距離'].shift(1)
+    df_past['距離増減'] = df_past['距離'] - df_past['前走距離'].fillna(df_past['距離'])
+    df_past['継続騎乗'] = (df_past['騎手'] == df_past.groupby('馬名')['騎手'].shift(1)).astype(int)
+
     style_map = {'逃げ': 1, '先行': 2, '中団': 3, '後方': 4, 'ﾏｸﾘ': 5}
     df_past['脚質_num'] = df_past['脚質'].astype(str).str.strip().map(style_map).fillna(3)
 
     df_past['馬番'] = pd.to_numeric(df_past['馬番'], errors='coerce')
     df_past['芝ダ_str'] = df_past['芝・ダ'].astype(str).str.strip().str.replace('田', 'ダ')
     
+    # 💡 【アイデアA】 斤量比の計算
+    df_past['斤量'] = pd.to_numeric(df_past['斤量'].astype(str).str.extract(r'(\d+\.?\d*)')[0], errors='coerce')
+    df_past['馬体重'] = pd.to_numeric(df_past['馬体重'], errors='coerce')
+    df_past['斤量比'] = (df_past['斤量'] / df_past['馬体重']).fillna(0)
+    
+    # レース列名の自動判定
+    race_col_past = 'R' if 'R' in df_past.columns else ('レース' if 'レース' in df_past.columns else None)
+    
+    # 💡 【アイデアC】 逃げ馬頭数（展開）の計算
+    if '日付' in df_past.columns and race_col_past:
+        nige_count = df_past[df_past['脚質_num'] == 1].groupby(['日付', '場所', race_col_past]).size().reset_index(name='逃げ馬頭数')
+        df_past = pd.merge(df_past, nige_count, on=['日付', '場所', race_col_past], how='left')
+    else:
+        df_past['逃げ馬頭数'] = 0
+    df_past['逃げ馬頭数'] = df_past['逃げ馬頭数'].fillna(0)
+
+    # 各種統計量（勝率など）の作成
     j_stats = df_past.groupby(['場所', '騎手'])['is_top3'].mean().reset_index().rename(columns={'is_top3': '場所別騎手複勝率'})
     s_stats = df_past.groupby(['場所', '種牡馬'])['is_top3'].mean().reset_index().rename(columns={'is_top3': '場所別血統複勝率'})
     g_stats = df_past.groupby(['場所', '芝ダ_str', '馬番'])['is_top3'].mean().reset_index().rename(columns={'is_top3': 'コース別馬番複勝率'})
-    t_stats = df_past.groupby(['場所', '調教師'])['is_top3'].mean().reset_index().rename(columns={'is_top3': '場所別調教師複勝率'}) if '調教師' in df_past.columns else pd.DataFrame()
+    horse_agg = df_past.groupby('馬名').agg(過去平均上り3F=('上り3F', 'mean'), 最終走距離=('距離', 'last'), 最終走騎手=('騎手', 'last')).reset_index()
 
+    # 💡 【アイデアB】 母父の場所別勝率
+    bs_stats = df_past.groupby(['場所', '母父'])['is_top3'].mean().reset_index().rename(columns={'is_top3': '場所別母父複勝率'}) if '母父' in df_past.columns else pd.DataFrame()
+    
+    # 💡 【アイデアD】 調教師 × 騎手 の黄金コンビ勝率
+    tj_stats = df_past.groupby(['調教師', '騎手'])['is_top3'].mean().reset_index().rename(columns={'is_top3': '調教師_騎手_複勝率'}) if '調教師' in df_past.columns else pd.DataFrame()
+
+    # 結合処理
     df_past = pd.merge(df_past, j_stats, on=['場所', '騎手'], how='left')
     df_past = pd.merge(df_past, s_stats, on=['場所', '種牡馬'], how='left')
     df_past = pd.merge(df_past, g_stats, on=['場所', '芝ダ_str', '馬番'], how='left')
-    if not t_stats.empty: df_past = pd.merge(df_past, t_stats, on=['場所', '調教師'], how='left')
-
-    horse_agg = df_past.groupby('馬名').agg(過去平均上り3F=('上り3F', 'mean')).reset_index()
     df_past = pd.merge(df_past, horse_agg, on='馬名', how='left')
+    if not bs_stats.empty: df_past = pd.merge(df_past, bs_stats, on=['場所', '母父'], how='left')
+    if not tj_stats.empty: df_past = pd.merge(df_past, tj_stats, on=['調教師', '騎手'], how='left')
 
     weather_map = {'晴':1, '曇':2, '小雨':3, '雨':4, '小雪':5, '雪':6}
     track_map = {'良':1, '稍':2, '稍重':2, '重':3, '不':4, '不良':4}
@@ -152,15 +182,31 @@ def load_and_train_ai():
     df_past['距離'] = pd.to_numeric(df_past['距離'], errors='coerce')
     df_past['年齢'] = pd.to_numeric(df_past['年齢'], errors='coerce')
 
+    # 特徴量リストにABCDを追加
     train_features = ['馬番', '斤量', '年齢', '馬体重', '場所別騎手複勝率', '場所別血統複勝率', '過去平均上り3F', 
                       '天候_num', '馬場状態_num', '芝ダ_num', '距離', '場所_num', 'コース別馬番複勝率', 
-                      '脚質_num', '前走確定着順']
+                      '脚質_num', '距離増減', '継続騎乗', 
+                      '斤量比', '逃げ馬頭数']
     
-    for col in train_features: df_past[col] = pd.to_numeric(df_past[col], errors='coerce').fillna(0)
-    model = lgb.LGBMClassifier(n_estimators=100, random_state=42, learning_rate=0.1, verbose=-1)
-    model.fit(df_past[train_features], df_past['is_top3'])
+    if '場所別母父複勝率' in df_past.columns: train_features.append('場所別母父複勝率')
+    if '調教師_騎手_複勝率' in df_past.columns: train_features.append('調教師_騎手_複勝率')
 
-    return model, j_stats, s_stats, g_stats, t_stats, horse_agg, place_map, weather_map, track_map, surface_map, train_features, style_map
+    for col in train_features: df_past[col] = pd.to_numeric(df_past[col], errors='coerce').fillna(0)
+    X = df_past[train_features]
+    y = df_past['is_top3']
+
+    # --- 3賢者の学習 ---
+    with st.spinner("🧙 3人の賢者を召喚中... (モデル学習)"):
+        m_lgb = lgb.LGBMClassifier(n_estimators=100, random_state=42, learning_rate=0.05, verbose=-1)
+        m_lgb.fit(X, y)
+        
+        m_xgb = xgb.XGBClassifier(n_estimators=100, random_state=42, learning_rate=0.05, eval_metric='logloss')
+        m_xgb.fit(X, y)
+        
+        m_cat = CatBoostClassifier(iterations=100, random_state=42, learning_rate=0.05, verbose=0)
+        m_cat.fit(X, y)
+
+    return (m_lgb, m_xgb, m_cat), j_stats, s_stats, g_stats, bs_stats, tj_stats, horse_agg, place_map, weather_map, track_map, surface_map, train_features, style_map
 
 # --- ヘルパー関数 ---
 def read_uploaded_file(uploaded_file, is_syutuba=False):
@@ -193,16 +239,14 @@ def clean_zougen_str(x):
     try: return float(s)
     except: return np.nan
 
-model, j_stats, s_stats, g_stats, t_stats, horse_agg, place_map, weather_map, track_map, surface_map, train_features, style_map = load_and_train_ai()
+(models, j_stats, s_stats, g_stats, bs_stats, tj_stats, horse_agg, place_map, weather_map, track_map, surface_map, train_features, style_map) = load_and_train_ai()
 
 # --- サイドバー ---
 with st.sidebar:
     st.header("⚙️ データ読み込み")
     
     is_master_ready = 'master_data' in st.session_state
-    is_result_ready = 'current_result' in st.session_state
     
-    # ファイルキーを使ってアップローダーの状態を管理
     syutuba_file_raw = st.session_state.get(f"syutuba_{st.session_state.file_key}")
     syutuba_uploaded = bool(syutuba_file_raw)
 
@@ -255,9 +299,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("<br><br><br>", unsafe_allow_html=True)
     
-    # 🧹 オールクリアでUIも完全に消去する！
     if st.button("🗑️ オールクリア (全データ初期化)", type="secondary", use_container_width=True):
-        # 現在のキーを保存して＋1する（これでファイルアップローダーが初期化される）
         new_key = st.session_state.file_key + 1
         st.session_state.clear()
         st.session_state.file_key = new_key
@@ -268,18 +310,36 @@ with st.sidebar:
                 except: pass
         st.rerun()
 
-# --- AI予測ロジック ---
+# --- AI予測ロジック (アンサンブル版 & 全盛り対応) ---
 def run_analysis(input_df):
     df_work = input_df.copy()
     df_work['脚質_num'] = df_work['脚質'].astype(str).str.strip().map(style_map).fillna(3)
     df_work['前走確定着順'] = pd.to_numeric(df_work['前走着順'], errors='coerce').fillna(10)
-    df_work['斤量'] = pd.to_numeric(df_work['斤量'].astype(str).str.extract(r'(\d+\.?\d*)')[0], errors='coerce')
     
+    # 💡 【アイデアA】 斤量比の計算（予測データ用）
+    df_work['斤量'] = pd.to_numeric(df_work['斤量'].astype(str).str.extract(r'(\d+\.?\d*)')[0], errors='coerce')
+    df_work['馬体重'] = pd.to_numeric(df_work['馬体重'], errors='coerce')
+    df_work['斤量比'] = (df_work['斤量'] / df_work['馬体重']).fillna(0)
+    
+    # 💡 【アイデアC】 逃げ馬頭数の計算（今回のレース用）
+    if 'R' in df_work.columns:
+        nige_count = df_work[df_work['脚質_num'] == 1].groupby(['場所', 'R']).size().reset_index(name='逃げ馬頭数')
+        df_work = pd.merge(df_work, nige_count, on=['場所', 'R'], how='left')
+    else:
+        df_work['逃げ馬頭数'] = 0
+    df_work['逃げ馬頭数'] = df_work['逃げ馬頭数'].fillna(0)
+    
+    df_work = pd.merge(df_work, horse_agg, on='馬名', how='left')
+    df_work['距離増減'] = pd.to_numeric(df_work['距離'], errors='coerce') - df_work['最終走距離'].fillna(pd.to_numeric(df_work['距離'], errors='coerce'))
+    df_work['継続騎乗'] = (df_work['騎手'] == df_work['最終走騎手']).astype(int)
+
     df_work = pd.merge(df_work, j_stats, on=['場所', '騎手'], how='left')
     df_work = pd.merge(df_work, s_stats, left_on=['場所', '父'], right_on=['場所', '種牡馬'], how='left')
     df_work = pd.merge(df_work, g_stats, left_on=['場所', '芝ダ', '馬番'], right_on=['場所', '芝ダ_str', '馬番'], how='left')
-    if not t_stats.empty: df_work = pd.merge(df_work, t_stats, on=['場所', '調教師'], how='left')
-    df_work = pd.merge(df_work, horse_agg, on='馬名', how='left')
+    
+    # 💡 【アイデアB・D】 母父成績・黄金コンビ成績の結合
+    if not bs_stats.empty: df_work = pd.merge(df_work, bs_stats, on=['場所', '母父'], how='left')
+    if not tj_stats.empty: df_work = pd.merge(df_work, tj_stats, on=['調教師', '騎手'], how='left')
 
     df_work['芝ダ_num'] = df_work['芝ダ'].map(surface_map)
     df_work['天候_num'] = np.nan
@@ -302,8 +362,14 @@ def run_analysis(input_df):
     df_work['年齢'] = pd.to_numeric(df_work['年齢'], errors='coerce')
 
     X = df_work[train_features].fillna(0)
-    df_work['AI予測_複勝確率'] = (model.predict_proba(X)[:, 1] * 100).round(1)
+    
+    # --- 3賢者の合議 ---
+    p_lgb = models[0].predict_proba(X)[:, 1]
+    p_xgb = models[1].predict_proba(X)[:, 1]
+    p_cat = models[2].predict_proba(X)[:, 1]
+    df_work['AI予測_複勝確率'] = ((p_lgb + p_xgb + p_cat) / 3 * 100).round(1)
 
+    # --- 調教スコア計算 ---
     df_work['調教スコア'] = 50.0
     if 'training_df' in st.session_state:
         df_training = st.session_state.training_df.copy()
@@ -349,11 +415,10 @@ def run_analysis(input_df):
     return pd.concat(final)
 
 
-# --- メイン画面 (タブ) ---
-tab1, tab2 = st.tabs(["🔮 AI PREDICTION (予想)", "📊 PERFORMANCE (成績分析)"])
+# --- メイン画面 (タブ追加版) ---
+tab1, tab2, tab3 = st.tabs(["🔮 AI PREDICTION (予想)", "📊 PERFORMANCE (成績分析)", "📖 MANUAL (説明書)"])
 
 with tab1:
-    # --- 通知（トースト）の表示処理 ---
     if st.session_state.get('predicted_just_now'):
         st.toast("✨ 予想を最新データで更新しました！", icon="✅")
         st.session_state.predicted_just_now = False
@@ -376,7 +441,6 @@ with tab1:
         with c2:
             selected_race = st.selectbox("🏁 R", sorted(races), key="sel_race")
 
-        # 👇=== ここが今回の修正部分です ===👇
         with st.expander("⛅ 天候・馬場状態の設定 (タップで開閉)", expanded=False):
             wc1, wc2, wc3 = st.columns(3)
             
@@ -400,7 +464,6 @@ with tab1:
             with wc3:
                 t_dirt_val = st.selectbox("ダート", t_options, index=td_idx, key=f"td_widget_{selected_venue}")
                 st.session_state[f"track_dirt_{selected_venue}"] = t_dirt_val
-        # 👆=================================👆
 
         st.markdown("---")
 
@@ -421,10 +484,24 @@ with tab1:
         clean_name = re.sub(r'^[\s\-ー_]+', '', clean_name) 
         clean_name = clean_name.strip()
 
+        # --- コース詳細と設定状態の表示 ---
+        course_type = str(race_df['芝ダ'].iloc[0]).replace('田', 'ダ') if not race_df.empty else ""
+        course_dist = str(int(pd.to_numeric(race_df['距離'].iloc[0], errors='coerce'))) if not race_df.empty and pd.notna(race_df['距離'].iloc[0]) else ""
+        
+        w_val_disp = st.session_state.get(f"weather_{selected_venue}", "指定なし")
+        if course_type == '芝':
+            t_val_disp = st.session_state.get(f"track_shiba_{selected_venue}", "指定なし")
+        elif course_type == 'ダ':
+            t_val_disp = st.session_state.get(f"track_dirt_{selected_venue}", "指定なし")
+        else:
+            t_val_disp = "指定なし" 
+
         if clean_name == "" or clean_name.lower() == "nan":
             st.subheader(f"🏆 {selected_venue} {int(selected_race)}R")
         else:
             st.subheader(f"🏆 {selected_venue} {int(selected_race)}R - {clean_name}")
+            
+        st.markdown(f"<h5 style='color: #444;'>🛣️ {course_type}{course_dist}m ｜ ⛅ 天候: <b>{w_val_disp}</b> ｜ 💧 馬場: <b>{t_val_disp}</b></h5>", unsafe_allow_html=True)
 
         if 'current_result' in st.session_state:
             pred_df = st.session_state.current_result[
@@ -538,8 +615,8 @@ with tab1:
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        if st.button("⚡ 予想を実行 / 更新する", type="primary", use_container_width=True):
-            with st.spinner('🧠 AIが最新データで計算中...'):
+        if st.button("⚡ EXECUTE TRIPLE-AI ENGINE", type="primary", use_container_width=True):
+            with st.spinner('🔄 3基のAIコアで並列解析を実行中...'):
                 time.sleep(0.6) 
                 st.session_state.current_result = run_analysis(st.session_state.master_data)
                 save_backup()
@@ -551,7 +628,6 @@ with tab1:
 with tab2:
     st.header("📊 PERFORMANCE (成績分析)")
     st.info("💡 予想を実行した後に、その日の結果CSVをアップロードすると回収率や勝率が表示されます。")
-    # アップローダーのUIリセット対応
     res_file = st.file_uploader("📂 UPLOAD RESULTS (結果CSV)", type=["csv"], key=f"res_{st.session_state.file_key}")
     
     if res_file and st.session_state.get('current_result') is not None:
@@ -608,3 +684,61 @@ with tab2:
                 
         except Exception as e: 
             st.error(f"分析エラー: {e}")
+
+# --- MANUALタブ ---
+with tab3:
+    st.header("📖 MANUAL (取扱説明書 & システム仕様)")
+    st.markdown("""
+    ### 🏁 SYSTEM WORKFLOW (使い方)
+    本システムは、過去5年分の膨大なレースデータと、直前のコンディションを掛け合わせて最強の予測を出力します。
+
+    1. **📥 データのセットアップ (SIDEBAR)**
+       画面左側のメニューから「出馬表 (CSV)」と、必要に応じて「調教データ (CSV)」をアップロードし、『💾 ファイルをシステムに記憶させる』を押します。
+    2. **📍 レースと環境の指定**
+       予測したい「競馬場」と「レース番号」を選択します。さらに、当日の「天候」と「馬場状態（芝/ダート）」を指定してください。（※別の会場を見に行っても、設定は自動で記憶されます）
+    3. **⚖️ 直前情報のチューニング (REAL-TIME EDIT)**
+       パドックや直前情報を見て、特定の馬の「馬体重」や「増減」が発表されたら、手動で入力して『💾 馬体重反映』を押すことで、予測データにリアルタイムで補正をかけられます。
+    4. **⚡ AI予測の実行**
+       『⚡ EXECUTE TRIPLE-AI ENGINE』ボタンを押すと、3基のAIが並列処理を開始し、瞬時に「総合AIスコア」と「予想印（◎〇▲△）」を弾き出します。
+    5. **📊 成績の分析 (PERFORMANCE)**
+       レース終了後、結果CSVをアップロードすることで、システムが算出した予想印ごとの「勝率」や「回収率（単勝/複勝）」を自動でグラフ化し、AIの調子を客観的に評価できます。
+
+    ---
+
+    ### 🧠 TRIPLE-AI ENGINE (搭載モデルと役割)
+    本システムは、単一のAIではなく**「アンサンブル学習（3賢者の合議制）」**を採用しています。得意分野の違う3つの最先端機械学習モデルが独自の視点で確率を算出し、その平均を取ることで「AIの思い込み」による致命的なハズレを排除しています。
+
+    * **🔵 LightGBM (ベースライン解析)**
+      処理速度と精度のバランスが最も優れたモデル。過去の基本統計量やスピード指数をベースに、「セオリー通りに走ればどの馬が強いか」という王道の予測を担当します。
+    * **🔴 XGBoost (アノマリー検知・穴馬ハンター)**
+      外れ値（極端なデータ）への耐性が強いモデル。荒れ馬場、極端なハイペース、または前走大敗からの巻き返しなど、波乱の展開になるほど威力を発揮し、思わぬ穴馬を推奨します。
+    * **🟡 CatBoost (血統・適性スペシャリスト)**
+      カテゴリデータ（文字列）の処理に世界最高峰の強さを持つモデル。「父・母父の血統」「調教師×騎手の相性（黄金コンビ）」「競馬場との適性」など、血統や人間関係のファクターから激走馬を炙り出します。
+
+    ---
+
+    ### ⚙️ PREDICTION LOGIC & FEATURES (予測ロジックと全入力ファクター)
+    本システムは、単なる「過去の着順」や「タイム」だけでなく、プロの馬券師が頭の中で行っている複雑な計算をすべて数値化し、**合計18種類以上のファクター（特徴量）**としてAIに学習させています。
+
+    最終的な**【総合AIスコア】**は、3基のAIが算出した『基本複勝確率 (75%)』に対し、当日の『調教スコア (25%)』をブレンドして算出されます。AIが実際に解析している主要なパラメータは以下の通りです。
+
+    **【1】 基礎能力 ＆ 適性パラメーター（馬のポテンシャル）**
+    * **⏱️ 過去平均上り3F（末脚の鋭さ）:** 過去の全レースにおける上がり3ハロンの平均タイム。展開が向いた時に確実に差し切る能力を評価。
+    * **🧬 場所別血統複勝率（種牡馬・母父）:** 「今の競馬場」における、父（サイアー）および母父（ブルードメアサイアー）の勝率。隠れたコース巧者や馬場適性（重馬場・ダート適性など）を炙り出します。
+    * **🔢 コース別馬番複勝率（枠順の有利不利）:** 指定された競馬場・芝/ダートにおいて、その「馬番（枠）」が過去にどれだけ馬券に絡んでいるかの確率。内外のトラックバイアスをAIが考慮します。
+
+    **【2】 陣営の本気度 ＆ 人間関係（ヒューマンファクター）**
+    * **🏇 場所別騎手複勝率:** 該当競馬場におけるジョッキーの得意・不得意を数値化。
+    * **🤝 黄金コンビ勝率（調教師 × 騎手）:** 「この厩舎が、この騎手を手配した時の勝負気配」を独自の勝率データとして算出。陣営の勝負度合いを推測します。
+    * **🔄 継続騎乗フラグ:** 前走と同じジョッキーが連続して騎乗するかどうか。乗り替わりによるマイナス面や、騎手の手戻りによるプラス面を判定します。
+
+    **【3】 物理的・展開的ファクター（レースダイナミクス）**
+    * **🛡️ 斤量体重比（パワー指標）:** 「背負う斤量 ÷ 馬体重」を算出し、小柄な馬への過酷な負担や、重い斤量を苦にしない大型馬のパワーを評価します。
+    * **📏 距離増減（ローテーション）:** 前走の距離との差分を計算。「距離短縮でペースが楽になる馬」や「延長でスタミナが活きる馬」のパフォーマンス変化を見抜きます。
+    * **🔥 逃げ馬頭数（展開予測ロジック）:** 出走馬の中で「前走、逃げた馬」の数を自動カウント。単騎逃げによるスローペース（前残り）か、競り合いによるハイペース（差し有利）かをAIが察知します。
+    * **🌤️ 天候・馬場状態:** 良～不良、晴～雪などのコンディション変化。
+
+    **【4】 リアルタイム・チューニング（直前補正）**
+    * **🏃‍♂️ 調教スコア（偏差値化）:** 「Lap1 - Lap2」の加速力を計算し、コースごとに偏差値（Tスコア）化。直前の仕上がり具合を評価します。
+    * **⚖️ 馬体重増減（手動補正）:** 発表された馬体重を入力することで、極端なプラス体重（太め残り）やマイナス体重（細化）による影響を最終スコアに反映させます。
+    """)

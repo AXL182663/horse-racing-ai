@@ -376,17 +376,31 @@ with tab1:
         with c2:
             selected_race = st.selectbox("🏁 R", sorted(races), key="sel_race")
 
+        # 👇=== ここが今回の修正部分です ===👇
         with st.expander("⛅ 天候・馬場状態の設定 (タップで開閉)", expanded=False):
             wc1, wc2, wc3 = st.columns(3)
+            
+            w_options = ["指定なし", "晴", "曇", "小雨", "雨", "小雪", "雪"]
+            t_options = ["指定なし", "良", "稍重", "重", "不良"]
+
+            saved_w = st.session_state.get(f"weather_{selected_venue}", "指定なし")
+            saved_ts = st.session_state.get(f"track_shiba_{selected_venue}", "指定なし")
+            saved_td = st.session_state.get(f"track_dirt_{selected_venue}", "指定なし")
+
+            w_idx = w_options.index(saved_w) if saved_w in w_options else 0
+            ts_idx = t_options.index(saved_ts) if saved_ts in t_options else 0
+            td_idx = t_options.index(saved_td) if saved_td in t_options else 0
+
             with wc1:
-                w_val = st.selectbox("天候", ["指定なし", "晴", "曇", "小雨", "雨", "小雪", "雪"], key=f"w_{selected_venue}")
+                w_val = st.selectbox("天候", w_options, index=w_idx, key=f"w_widget_{selected_venue}")
                 st.session_state[f"weather_{selected_venue}"] = w_val
             with wc2:
-                t_shiba_val = st.selectbox("芝", ["指定なし", "良", "稍重", "重", "不良"], key=f"ts_{selected_venue}")
+                t_shiba_val = st.selectbox("芝", t_options, index=ts_idx, key=f"ts_widget_{selected_venue}")
                 st.session_state[f"track_shiba_{selected_venue}"] = t_shiba_val
             with wc3:
-                t_dirt_val = st.selectbox("ダート", ["指定なし", "良", "稍重", "重", "不良"], key=f"td_{selected_venue}")
+                t_dirt_val = st.selectbox("ダート", t_options, index=td_idx, key=f"td_widget_{selected_venue}")
                 st.session_state[f"track_dirt_{selected_venue}"] = t_dirt_val
+        # 👆=================================👆
 
         st.markdown("---")
 
